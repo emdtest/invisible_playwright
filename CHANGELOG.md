@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- A CORS preflight (an OPTIONS request that no route holds) is no longer reported to the client, as in Playwright's own server: `page.on("request")`, `route` and a request counter hear of one request fewer for each preflighted fetch of the page.
+
 ## [0.52.0] - 2026-11-14
 
 ### Changed
