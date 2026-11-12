@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `Locator.screenshot()` and `ElementHandle.screenshot()`: a picture of the element, as in Playwright (the element is scrolled into view and the rectangle of its box, rounded to whole pixels, is taken through the page's own screenshot, in the page, in a frame of another site and in a frame nested in it).
+
 ## [0.52.0] - 2026-11-14
 
 ### Changed
