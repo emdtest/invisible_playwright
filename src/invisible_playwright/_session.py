@@ -20,6 +20,7 @@ the two classes is `await`, and nothing else belongs in this file.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from ._cursor import (ENGINE_BINARY,
                       ENGINE_PYTHON,
@@ -448,6 +449,41 @@ class CommonLaunch:
         if vd is not None:
             vd.start()
             self._virtual_display = vd
+        return False
+
+    async def _resolve_headless_async(self) -> bool:
+        """`_resolve_headless` for the async API: the display starts in a worker.
+
+        Starting the surface is a blocking call - on Linux it spawns an Xvfb
+        and waits for it to report ready (~75 ms measured, seconds on a loaded
+        host) - and `__aenter__` made it on the user's loop, so every other
+        browser of the process stood still for that long, `headless=True`
+        or not. The surface is the same and is still created before the prefs
+        are composed; only the thread changes. The sync API keeps the direct
+        call: nothing else runs on its thread.
+        """
+        if not self._headless:
+            return False
+        if true_headless_requested():
+            return True
+        vd = make_virtual_display()
+        if vd is None:
+            return False
+        started = asyncio.ensure_future(asyncio.to_thread(vd.start))
+        try:
+            await asyncio.shield(started)
+        except asyncio.CancelledError:
+            # The worker cannot be interrupted and may yet create the surface
+            # for a launch nobody is waiting for: release it when it ends.
+            loop = asyncio.get_running_loop()
+
+            def release(done: "asyncio.Future") -> None:
+                if not done.cancelled() and done.exception() is None:
+                    loop.run_in_executor(None, vd.stop)
+
+            started.add_done_callback(release)
+            raise
+        self._virtual_display = vd
         return False
 
     def _default_context_kwargs(self) -> Dict[str, Any]:
