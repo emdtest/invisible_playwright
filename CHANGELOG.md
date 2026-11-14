@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- `page.expose_function`, `page.expose_binding`, `context.expose_function` and `context.expose_binding`, as in Playwright: the page calls a Python function and gets a promise (the value, a rejection when the function raised, an await when it is async). The page sees the function and nothing else: one engine binding per exposed name (`Browser.addBinding` for a context, `Page.addBinding` for a page), no name of ours on the window and no init script. An engine without `Page.addBinding` is refused with a clear sentence, with no fallback. Arguments and results cross as JSON.
+
 ## [0.52.0] - 2026-11-14
 
 ### Changed
