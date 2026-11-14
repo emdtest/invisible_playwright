@@ -258,12 +258,14 @@ class _Page:
 def engine(monkeypatch):
     monkeypatch.setattr(srv, "PageDispatcher", _Page)
     e = _Engine()
-    browser = BrowserDispatcher(Server(), None, e, "151.0", session_seed=1)
+    server = Server()
+    browser = BrowserDispatcher(server, None, e, "151.0", session_seed=1)
     e.browser = browser
     context = BrowserContextDispatcher(browser.server, browser, {}, "C1")
     browser.contexts.append(context)
     e.context = context
-    return e
+    yield e
+    server.shutdown()      # the connection's one starter ends with its server
 
 
 def _new_page_in_thread(engine, number, out):

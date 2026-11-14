@@ -39,6 +39,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from . import perimeter, variants
+from ._threads import ThreadStarter
 # One class for a target that is gone, raised here for a disposed object and
 # by the connection for a closed pipe. Defined there, the lower layer.
 from invisible_core.juggler.connection import TargetClosedError  # noqa: F401 - re-exported on purpose
@@ -274,8 +275,30 @@ class Server:
         self._on_shutdown: list = []
         #: What `shutdown` runs after every hook. See `after_shutdown`.
         self._after_shutdown: list = []
+        self._starter: Optional[ThreadStarter] = None
+        self._starter_lock = threading.Lock()
+        self._is_shut_down = False
+        #: Why a thread the starter was handed could not be started (the last few).
+        self.start_errors: list = []
 
     # ── plumbing ────────────────────────────────────────────────────────────
+    @property
+    def thread_starter(self) -> ThreadStarter:
+        """The ONE thread that starts threads for this connection: the transport's workers and every browser's reader hand theirs to it.
+
+        Built on first use, ended by `shutdown`. Served by several clients (`remote._SharedServer`) it is the same one: the server
+        is the connection's owner there too, and its browser's contexts come and go under it."""
+        with self._starter_lock:
+            if self._starter is None:
+                self._starter = ThreadStarter(self._start_failed)
+                if self._is_shut_down:
+                    self._starter.stop()
+            return self._starter
+
+    def _start_failed(self, why: str) -> None:
+        if len(self.start_errors) < 32:
+            self.start_errors.append(why)
+
     def attach(self, transport: Any) -> None:
         self._transport = transport
 
@@ -436,6 +459,11 @@ class Server:
             except Exception:
                 pass
         self._after_shutdown.clear()
+        with self._starter_lock:
+            self._is_shut_down = True
+            starter = self._starter
+        if starter is not None:
+            starter.stop()
 
     # ── the entry point ─────────────────────────────────────────────────────
     def handle(self, message: Dict) -> Any:

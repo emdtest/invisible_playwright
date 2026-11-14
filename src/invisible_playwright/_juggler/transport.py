@@ -105,11 +105,25 @@ class InProcessTransport(Transport):
 
     # ── the five methods the seam declares ──────────────────────────────────
     async def connect(self) -> None:
-        for i in range(self.WORKERS):
-            t = threading.Thread(target=self._work, name="juggler-%d" % i,
-                                 daemon=True)
-            t.start()
-            self._threads.append(t)
+        """⛔ NO `Thread.start` ON THE LOOP, NOT EVEN ONE. `connect` is a coroutine of the caller's event loop, and
+        `Thread.start` does not return until the new thread is running (`self._started.wait()`): measured with four
+        browsers in one process under CPU load on Windows, the four starts held the loop ~200 ms per launch (4.4% of the
+        main thread's wall time), the same wait the engine's reader is spared by the same starter.
+
+        The four `Thread` objects are only BUILT here (building waits for nothing), so `request_stop` still knows how many
+        sentinels the pool needs, and the server's one starter (`Server.thread_starter`, shared with every browser's reader) starts them. Messages sent before a worker runs wait in the queue and are
+        answered when it does, which is what `send` always relied on."""
+        self._threads = [
+            threading.Thread(target=self._work, name="juggler-%d" % i, daemon=True)
+            for i in range(self.WORKERS)]
+        server_starter = self._server.thread_starter
+        for t in self._threads:
+            server_starter.start_built(t, self._workers_could_not_start)
+
+    def _workers_could_not_start(self, why: str) -> None:
+        """No worker may ever answer a queued message, so the session cannot go on: end it, the way a transport that lost
+        its other end ends, instead of leaving every call to wait for a reply that cannot come."""
+        self.request_stop()
 
     async def run(self) -> None:
         """⛔ Must not return until the transport is stopped: `Connection.run`
@@ -138,7 +152,9 @@ class InProcessTransport(Transport):
     async def wait_until_stopped(self) -> None:
         await self._stopped_future
         for t in self._threads:
-            t.join(timeout=5)
+            # A worker the starter never started (the transport stopped first) has nothing to join.
+            if t.is_alive():
+                t.join(timeout=5)
 
     def send(self, message: Dict) -> None:
         """⛔ ENQUEUE ONLY. Running the operation here would run it on the
