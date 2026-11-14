@@ -7,20 +7,28 @@ left 635). So the number of live starters, counted when the last test of a modul
 
 Module level and not per test: a module-scoped browser (the e2e ones) is legitimately open between its tests and closed at the end.
 """
+import sys
 import time
 
 import pytest
 
 STARTER_NAME = "invpw-thread-starter"
+_THREADS_MODULE = "invisible_playwright._juggler._threads"
 # `stop` is asynchronous: it queues a None and the thread leaves on its next turn. A moment, not a wait for a leak that will not leave.
 _JOIN_SECONDS = 5.0
 
 
 def starters_alive():
     """The starters built and not ended, counted from their construction: `ThreadStarter` begins its thread without waiting for it, so
-    one that has not run yet is in no `threading.enumerate()` (a census of live threads missed 2 leaks on a Linux runner)."""
-    from invisible_playwright._juggler._threads import ThreadStarter
-    return ThreadStarter.open_starters()
+    one that has not run yet is in no `threading.enumerate()` (a census of live threads missed 2 leaks on a Linux runner).
+
+    NO IMPORT HERE. A module that never loaded `_threads` cannot have built a starter, so the answer is empty without importing anything:
+    the census runs from conftest in every job, including ones that install pytest alone and have no `invisible_core` (the `version`
+    job failed on `invisible_playwright._pin` when this function imported the package)."""
+    threads = sys.modules.get(_THREADS_MODULE)
+    if threads is None:
+        return []
+    return threads.ThreadStarter.open_starters()
 
 
 def wait_until_back_to(before, seconds=_JOIN_SECONDS):
