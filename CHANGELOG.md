@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.52.1] - 2026-11-14
+
+Same pin as 0.52.0 (invisible-core 64.71.0).
+
+### Added
+- `page.expose_function`, `page.expose_binding`, `context.expose_function` and `context.expose_binding`, as in Playwright: the page calls a Python function and gets a promise (the value, a rejection when the function raised, an await when it is async). The page sees the function and nothing else (no name of ours on the window, no init script); an engine without `Page.addBinding` is refused with a clear sentence. Arguments and results cross as JSON. (#471)
+- `Locator.screenshot()` and `ElementHandle.screenshot()`: a picture of the element, as in Playwright, in the page, in a frame of another site and in a frame nested in it. (#470)
+
+### Fixed
+- A context init script added after a page exists runs once in it, not twice. (#469)
+- A CORS preflight (an OPTIONS request that no route holds) is no longer reported to the client, as in Playwright's own server: `page.on("request")`, `route` and a request counter hear of one request fewer for each preflighted fetch of the page. (#467)
+
 ### Changed
-- Comments, the fork notes and one test message no longer point at scripts that were deleted with this change (the transport
-  comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes.
+- Comments, the fork notes and one test message no longer point at scripts that were deleted (the transport comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes. (#458)
 
 ## [0.52.0] - 2026-11-14
 
