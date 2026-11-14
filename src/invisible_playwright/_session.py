@@ -546,24 +546,3 @@ class CommonLaunch:
         _enable_cursor_engine(
             owner, seed=self.seed, max_seconds=_cursor_max_seconds(self._humanize)
         )
-
-    def _bind_process_tree(self) -> None:
-        """Tie the browser tree to this process's lifetime, at the OS level.
-
-        MEASURED before being written, because the first attempt at this fixed
-        a path that was not broken: an exception out of the `with` block does
-        NOT leak - __exit__ runs and Playwright cleans up, zero survivors over
-        an interleaved A/B. The leak is the killed-runner path, where __exit__
-        never executes at all: launch, kill the runner, and eight processes
-        were still alive; twelve on the second attempt. Nothing written inside
-        _teardown can reach that, so the guarantee comes from a Windows job
-        object that the kernel empties when this process's handle closes,
-        however this process ends.
-
-        Best-effort by construction: a failure here leaves the pre-existing
-        behaviour rather than breaking a launch that is otherwise fine.
-        """
-        try:
-            self._lifetime_guard.bind(self._session_token)
-        except Exception:
-            pass

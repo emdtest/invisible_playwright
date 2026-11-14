@@ -358,7 +358,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
                     env=env,
                     **self._persistent_context_kwargs(),
                 )
-                self._bind_process_tree()
                 self._arm_cursor_engine(self._persistent_context)
                 return self._persistent_context
             self._browser = self._pw.firefox.launch(
@@ -374,7 +373,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
             # pref can spoof it. Inside the try so a refusal tears the browser
             # down instead of leaking the process we just refused.
             assert_wire_version(self._browser)
-            self._bind_process_tree()
         except BaseException:
             # Python doesn't call __exit__ when __enter__ raises - clean up
             # the virtual display + Playwright manually so we don't leak Xvfb

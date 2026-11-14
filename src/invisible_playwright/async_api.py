@@ -153,7 +153,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
                     env=env,
                     **self._default_context_kwargs(),
                 )
-                self._bind_process_tree()
                 self._arm_cursor_engine(self._persistent_context)
                 return self._persistent_context
             self._browser = await self._pw.firefox.launch(
@@ -167,7 +166,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
             # See the sync launcher: browser.version comes from the connection
             # initializer, costs no round trip, and cannot be spoofed by a pref.
             assert_wire_version(self._browser)
-            self._bind_process_tree()
         except BaseException:
             await self._teardown()
             raise
