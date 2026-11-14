@@ -79,3 +79,26 @@ def test_a_transport_stopped_before_its_workers_started_ends_without_error(monke
         await asyncio.wait_for(transport.wait_until_stopped(), 10)
 
     asyncio.run(scenario())
+
+
+def test_building_the_shared_starter_waits_for_no_thread_start(monkeypatch):
+    """The starter every caller of `ThreadStarter` builds on its own thread must not itself cost a `Thread.start` there."""
+    from invisible_playwright._juggler._threads import ThreadStarter
+
+    original = threading.Thread.start
+
+    def slow_start(self):
+        time.sleep(START_DELAY_S)
+        return original(self)
+    monkeypatch.setattr(threading.Thread, "start", slow_start)
+
+    began = time.perf_counter()
+    starter = ThreadStarter(on_error=lambda why: None)
+    ran = threading.Event()
+    starter.start(target=ran.set, name="invpw-test-started")
+    took = time.perf_counter() - began
+    try:
+        assert took < 0.05, "building the starter and queueing a thread waited %.0f ms" % (took * 1000)
+        assert ran.wait(10), "the queued thread never ran"
+    finally:
+        starter.stop()

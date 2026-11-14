@@ -4,7 +4,7 @@
 four browsers at once, it was 75% of the reader's lag, and it made `networkidle` miss 7 times in 400 (none in 400 once the start no longer
 waited). Two listeners of this package started a thread from the reader: `Browser.attachedToTarget` (one thread per adoption) and
 `Page.fileChooserOpened` (one thread to announce the chooser). Both now hand the thread to the browser's ONE long-lived starter
-(`_ThreadStarter`, made with the browser), which starts it.
+(`ThreadStarter`, made with the browser), which starts it.
 
 NO BROWSER HERE: the real dispatchers over a scripted Juggler connection, and every event of the engine delivered FROM A THREAD OF ITS OWN
 (the reader's stand-in), the way the connection delivers them. `Thread.start` is replaced by a recorder of the thread that called it.

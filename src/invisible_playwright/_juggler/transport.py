@@ -43,7 +43,6 @@ names the guid it creates, and that is the dispatcher's job, not the pool's.
 """
 from __future__ import annotations
 
-import _thread
 import asyncio
 import os
 import queue
@@ -55,6 +54,7 @@ from invisible_playwright._pw._impl._helper import parse_error
 from invisible_playwright._pw._impl._transport import Transport
 
 from . import wire
+from ._threads import ThreadStarter
 
 
 def _error_payload(failure: BaseException) -> Dict[str, str]:
@@ -102,6 +102,7 @@ class InProcessTransport(Transport):
         self._stopped = threading.Event()
         self._stopped_future: asyncio.Future = loop.create_future()
         self._threads: list = []
+        self._starter: Optional[ThreadStarter] = None
         server.attach(self)
 
     # ── the five methods the seam declares ──────────────────────────────────
@@ -109,30 +110,22 @@ class InProcessTransport(Transport):
         """⛔ NO `Thread.start` ON THE LOOP, NOT EVEN ONE. `connect` is a coroutine of the caller's event loop, and
         `Thread.start` does not return until the new thread is running (`self._started.wait()`): measured with four
         browsers in one process under CPU load on Windows, the four starts held the loop ~200 ms per launch (4.4% of the
-        main thread's wall time), the same wait `_ThreadStarter` (`server.py`) keeps off the engine's reader.
+        main thread's wall time), the same wait the engine's reader is spared by the same `ThreadStarter`.
 
         The four `Thread` objects are only BUILT here (building waits for nothing), so `request_stop` still knows how many
-        sentinels the pool needs, and a bootstrapper does the starting. The bootstrapper is begun with
-        `_thread.start_new_thread`, which returns as soon as the OS has made the thread and waits for nothing: a
-        `threading.Thread` for it would be one more `start` on the loop. Messages sent before a worker runs wait in the
-        queue and are answered when it does, which is what `send` always relied on."""
+        sentinels the pool needs, and the starter starts them. Messages sent before a worker runs wait in the queue and are
+        answered when it does, which is what `send` always relied on."""
         self._threads = [
             threading.Thread(target=self._work, name="juggler-%d" % i, daemon=True)
             for i in range(self.WORKERS)]
-        _thread.start_new_thread(self._start_workers, ())
-
-    def _start_workers(self) -> None:
-        """Runs on the bootstrapper, never on the loop: here a `Thread.start` may wait as long as the machine makes it."""
+        self._starter = ThreadStarter(self._workers_could_not_start)
         for t in self._threads:
-            if self._stopped.is_set():
-                return
-            try:
-                t.start()
-            except BaseException:
-                # No worker ever answers a queued message, so the session cannot go on: end it, the way a transport that
-                # lost its other end ends, instead of leaving every call to wait for a reply that cannot come.
-                self.request_stop()
-                return
+            self._starter.start_built(t)
+
+    def _workers_could_not_start(self, why: str) -> None:
+        """No worker may ever answer a queued message, so the session cannot go on: end it, the way a transport that lost
+        its other end ends, instead of leaving every call to wait for a reply that cannot come."""
+        self.request_stop()
 
     async def run(self) -> None:
         """⛔ Must not return until the transport is stopped: `Connection.run`
@@ -147,6 +140,8 @@ class InProcessTransport(Transport):
         # a flag.
         for _ in self._threads:
             self._queue.put(None)
+        if self._starter is not None:
+            self._starter.stop()
         try:
             self._server.shutdown()
         except Exception:
@@ -161,7 +156,7 @@ class InProcessTransport(Transport):
     async def wait_until_stopped(self) -> None:
         await self._stopped_future
         for t in self._threads:
-            # A worker the bootstrapper never started (the transport stopped first) has nothing to join.
+            # A worker the starter never started (the transport stopped first) has nothing to join.
             if t.is_alive():
                 t.join(timeout=5)
 

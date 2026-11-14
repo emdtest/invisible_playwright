@@ -11,9 +11,9 @@ from pathlib import Path
 TESTS = str(Path(__file__).resolve().parent)
 
 _BUILD = """
-    from invisible_playwright._juggler.server import _ThreadStarter
+    from invisible_playwright._juggler._threads import ThreadStarter
     def build():
-        return _ThreadStarter(on_error=lambda message: None)
+        return ThreadStarter(on_error=lambda message: None)
 """
 
 

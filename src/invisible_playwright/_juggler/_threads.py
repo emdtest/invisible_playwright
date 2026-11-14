@@ -1,0 +1,73 @@
+"""The one way this package starts a thread from a place that must not wait for it.
+
+`Thread.start` does not return until the new thread is running (`self._started.wait()`), and on Windows under load that wait is
+milliseconds long. Two places in the package cannot afford it: the engine connection's reader (an event is measured late by every
+millisecond the reader is late) and the user's event loop (`InProcessTransport.connect`: four worker starts held the loop ~200 ms per
+launch with four browsers in one process). Both hand the thread to `ThreadStarter`.
+"""
+from __future__ import annotations
+
+import _thread as _raw_thread
+import queue
+import threading
+from typing import Any, Callable
+
+
+class ThreadStarter:
+    """The ONE long-lived thread that starts the other threads it is handed.
+
+    ⛔ NO `Thread.start` ON THE CALLER, AND THAT INCLUDES BUILDING THE STARTER. `start` and `start_built` only queue (a `Thread` that is
+    only BUILT waits for nothing); this thread starts what is queued. The starter's own thread is begun with `_thread.start_new_thread`
+    running `Thread.start`: the OS makes a thread and the caller returns at once, and the wait for the starter to run happens on that
+    raw thread, not on the caller. The starter is still a `threading.Thread` named `invpw-thread-starter` (it is alive a moment after
+    the constructor returns, not before).
+
+    It starts threads and does not run the work itself, on purpose: an adoption waits for the engine as long as the engine takes (a popup
+    whose destination never answers is waited for without a limit), and a worker that ran it would hold every later adoption behind it,
+    `new_page()` included. Each piece of work keeps the thread of its own and the name it always had.
+    """
+
+    def __init__(self, on_error: Callable[[str], None]) -> None:
+        self._queue: "queue.SimpleQueue" = queue.SimpleQueue()
+        self._on_error = on_error
+        self._stopped = False
+        self._thread = threading.Thread(target=self._run, daemon=True, name="invpw-thread-starter")
+        _raw_thread.start_new_thread(self._begin, ())
+
+    def _begin(self) -> None:
+        try:
+            self._thread.start()
+        except BaseException as failure:
+            self._report("%s could not be started: %s" % (self._thread.name, failure))
+
+    def start(self, **thread_arguments: Any) -> None:
+        """Called from any thread, the reader's and the loop's included: builds a daemon thread and queues it. Never waits."""
+        if self._stopped:
+            return
+        self._queue.put(threading.Thread(daemon=True, **thread_arguments))
+
+    def start_built(self, thread: threading.Thread) -> None:
+        """Queue a thread the caller built (its name, its daemon flag, its target). Never waits."""
+        if self._stopped:
+            return
+        self._queue.put(thread)
+
+    def stop(self) -> None:
+        self._stopped = True
+        self._queue.put(None)
+
+    def _report(self, why: str) -> None:
+        try:
+            self._on_error(why)
+        except Exception:
+            pass
+
+    def _run(self) -> None:
+        while True:
+            thread = self._queue.get()
+            if thread is None:
+                return
+            try:
+                thread.start()
+            except Exception as failure:
+                self._report("%s could not be started: %s" % (thread.name, failure))
