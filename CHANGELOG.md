@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Comments, the fork notes and one test message no longer point at scripts that were deleted with this change (the transport
+  comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes.
+
 ## [0.52.0] - 2026-11-14
 
 ### Changed
