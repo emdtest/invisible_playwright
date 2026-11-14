@@ -4264,7 +4264,7 @@ class PageDispatcher(Dispatcher):
             if self._binding_running:
                 return
             self._binding_running = True
-        # ⛔ NOT `Thread.start` HERE: this is the reader, and the browser's thread starter does it (`_ThreadStarter`).
+        # ⛔ NOT `Thread.start` HERE: this is the reader, and the browser's thread starter does it (`ThreadStarter`).
         self.context.browser.thread_starter.start(target=self._binding_loop)
 
     def _binding_loop(self) -> None:
