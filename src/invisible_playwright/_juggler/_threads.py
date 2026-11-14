@@ -27,7 +27,20 @@ class ThreadStarter:
     `new_page()` included. Each piece of work keeps the thread of its own and the name it always had.
     """
 
+    #: Every starter built and not yet ended (from the constructor, which returns before its thread runs, to the end of that thread).
+    #: Without it a starter whose thread has not begun yet is in no `threading.enumerate()` and nobody can count it: the census of
+    #: tests/_browser_census.py missed the leaked starters on a machine where the raw thread was late to run.
+    _open: "set" = set()
+    _open_lock = threading.Lock()
+
+    @classmethod
+    def open_starters(cls) -> list:
+        with cls._open_lock:
+            return list(cls._open)
+
     def __init__(self, on_error: Callable[[str], None]) -> None:
+        with ThreadStarter._open_lock:
+            ThreadStarter._open.add(self)
         self._queue: "queue.SimpleQueue" = queue.SimpleQueue()
         self._on_error = on_error
         self._stopped = False
@@ -38,7 +51,12 @@ class ThreadStarter:
         try:
             self._thread.start()
         except BaseException as failure:
+            self._ended()
             self._report("%s could not be started: %s" % (self._thread.name, failure))
+
+    def _ended(self) -> None:
+        with ThreadStarter._open_lock:
+            ThreadStarter._open.discard(self)
 
     def start(self, **thread_arguments: Any) -> None:
         """Called from any thread, the reader's and the loop's included: builds a daemon thread and queues it. Never waits."""
@@ -63,6 +81,12 @@ class ThreadStarter:
             pass
 
     def _run(self) -> None:
+        try:
+            self._loop()
+        finally:
+            self._ended()
+
+    def _loop(self) -> None:
         while True:
             thread = self._queue.get()
             if thread is None:
