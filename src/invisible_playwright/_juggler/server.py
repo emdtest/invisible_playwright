@@ -48,7 +48,7 @@ from invisible_core.juggler import connection as juggler
 from invisible_core.juggler.actions import Actions
 from invisible_core.juggler.deadline import Deadline
 from . import _bindings, dialogs
-from ._threads import ThreadStarter
+from ._threads import ThreadStarterLease
 from .pointer import Pointer
 from .dispatcher import (Dispatcher, ExpectNotMet, ProtocolException,
                          Server, current_call)
@@ -5209,8 +5209,9 @@ class BrowserDispatcher(Dispatcher):
         # subscriber seeing an event before this one records the session, and
         # recording earlier can only shorten the window in which `session_for`
         # is waiting for something that has already arrived.
-        self._starter = ThreadStarter(
-            lambda why: conn.handler_errors.append(why) if len(conn.handler_errors) < 32 else None)
+        # ⛔ NOT A STARTER OF ITS OWN: the connection's server owns the one (`Server.thread_starter`), and this is the browser's lease on
+        # it, ended by the browser's connection.
+        self._starter = ThreadStarterLease(lambda: server.thread_starter)
         conn.add_close_listener(self._starter.stop)
         conn.add_listener(self._route_browser_event)
         # The last step of starting the browser, under what is left of the
@@ -5236,8 +5237,8 @@ class BrowserDispatcher(Dispatcher):
         self._adopt_enabled = True
 
     @property
-    def thread_starter(self) -> "ThreadStarter":
-        """The one thread that starts threads on behalf of the engine's reader (`ThreadStarter`)."""
+    def thread_starter(self) -> "ThreadStarterLease":
+        """What starts threads on behalf of the engine's reader: the connection's one starter (`Server.thread_starter`), while this browser lives."""
         return self._starter
 
     def require_interception(self, what: str) -> None:

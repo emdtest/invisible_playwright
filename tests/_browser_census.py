@@ -1,7 +1,7 @@
 """The check that no test module leaves a browser open.
 
-A `BrowserDispatcher` starts one daemon thread, "invpw-thread-starter", and stops it only when the connection's close listeners fire. A
-unit test that builds a dispatcher on a fake connection and never closes it leaves that thread alive, and the thread keeps the connection,
+A connection's server owns ONE daemon thread, "invpw-thread-starter" (`Server.thread_starter`, made when the first thread is asked of it), and
+stops it only on `shutdown`. A unit test that builds a dispatcher on a server and never shuts the server down leaves that thread alive, and the thread keeps the connection,
 the browser and every context alive for the rest of the worker (a gc census of a closed context once found 7 of them, and one file alone
 left 635). So the number of live starters, counted when the last test of a module has torn down, must be what it was before the module.
 

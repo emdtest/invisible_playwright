@@ -10,7 +10,7 @@ from __future__ import annotations
 import _thread as _raw_thread
 import queue
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 
 class ThreadStarter:
@@ -62,13 +62,15 @@ class ThreadStarter:
         """Called from any thread, the reader's and the loop's included: builds a daemon thread and queues it. Never waits."""
         if self._stopped:
             return
-        self._queue.put(threading.Thread(daemon=True, **thread_arguments))
+        self._queue.put((threading.Thread(daemon=True, **thread_arguments), None))
 
-    def start_built(self, thread: threading.Thread) -> None:
-        """Queue a thread the caller built (its name, its daemon flag, its target). Never waits."""
+    def start_built(self, thread: threading.Thread, on_failure: Optional[Callable[[str], None]] = None) -> None:
+        """Queue a thread the caller built (its name, its daemon flag, its target). Never waits.
+
+        `on_failure(why)` runs on the starter if this thread cannot be started, besides the starter's own report."""
         if self._stopped:
             return
-        self._queue.put(thread)
+        self._queue.put((thread, on_failure))
 
     def stop(self) -> None:
         self._stopped = True
@@ -88,10 +90,37 @@ class ThreadStarter:
 
     def _loop(self) -> None:
         while True:
-            thread = self._queue.get()
-            if thread is None:
+            item = self._queue.get()
+            if item is None:
                 return
+            thread, on_failure = item
             try:
                 thread.start()
             except Exception as failure:
-                self._report("%s could not be started: %s" % (thread.name, failure))
+                why = "%s could not be started: %s" % (thread.name, failure)
+                self._report(why)
+                if on_failure is not None:
+                    try:
+                        on_failure(why)
+                    except Exception:
+                        pass
+
+
+class ThreadStarterLease:
+    """One browser's use of the connection's starter: `start` while the browser's connection lives, nothing after it.
+
+    The starter is the SERVER's (one thread per connection, however many browsers it launches, `Server.thread_starter`) and ends with
+    the server. A browser's connection ends earlier than that: from then on a thread its events ask for must not start, which is
+    what `stop` on the browser's own starter used to give. The starter is asked for on the first `start`, so a browser that never
+    needs a thread makes none."""
+
+    def __init__(self, get_starter: Callable[[], ThreadStarter]) -> None:
+        self._get_starter = get_starter
+        self._stopped = False
+
+    def start(self, **thread_arguments: Any) -> None:
+        if not self._stopped:
+            self._get_starter().start(**thread_arguments)
+
+    def stop(self) -> None:
+        self._stopped = True

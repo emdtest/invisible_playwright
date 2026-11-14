@@ -127,16 +127,20 @@ def test_an_attached_target_and_a_file_chooser_start_no_thread_on_the_reader(sta
         server.shutdown()
 
 
-def test_the_starter_of_a_browser_ends_with_its_connection(starts):
+def test_the_starter_of_a_browser_ends_with_its_connection_and_the_connections_thread_with_the_server(starts):
     server, conn, browser, context, opener_target = _world(starts)
     try:
         starter = browser.thread_starter
         starter.start(target=lambda: None, name="invpw-test-started")
         assert _wait(lambda: ("invpw-thread-starter", "invpw-test-started") in starts, 3)
         conn.announce_closed()
-        starter._thread.join(5)
-        assert not starter._thread.is_alive(), "the starter outlived the connection"
-        starter.start(target=lambda: None, name="invpw-test-after-the-end")      # after the end: nothing is started, nothing raises
+        starter.start(target=lambda: None, name="invpw-test-after-the-end")      # after the connection's end: nothing is started, nothing raises
+        shared = server.thread_starter
+        assert shared is server.thread_starter, "the server must own ONE starter"
+        assert shared._thread.is_alive(), "the server's starter must outlive one browser's connection"
+        server.shutdown()
+        shared._thread.join(5)
+        assert not shared._thread.is_alive(), "the starter outlived the server"
         assert all(c[1] != "invpw-test-after-the-end" for c in starts)
     finally:
         server.shutdown()

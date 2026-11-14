@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+from invisible_playwright._juggler.dispatcher import Server
 from invisible_playwright._juggler.transport import InProcessTransport
 
 pytestmark = pytest.mark.unit
@@ -24,15 +25,11 @@ pytestmark = pytest.mark.unit
 START_DELAY_S = 0.3
 
 
-class _Server:
-    def attach(self, transport):
-        pass
+class _Server(Server):
+    """The registry's base class, whose `thread_starter` the transport starts its workers through, answering every call with its id."""
 
     def handle(self, message):
         return {"echo": message["id"]}
-
-    def shutdown(self):
-        pass
 
 
 def test_connect_returns_before_any_worker_has_started_and_a_message_is_still_answered(monkeypatch):
@@ -102,3 +99,24 @@ def test_building_the_shared_starter_waits_for_no_thread_start(monkeypatch):
         assert ran.wait(10), "the queued thread never ran"
     finally:
         starter.stop()
+
+
+def test_a_browsers_reader_and_the_transports_workers_share_ONE_starter():
+    """Each browser costs one starter thread, not two: the transport's workers and the browser's lease both go through the server's."""
+    from invisible_playwright._juggler._threads import ThreadStarter, ThreadStarterLease
+
+    async def scenario():
+        server = _Server()
+        transport = InProcessTransport(asyncio.get_running_loop(), server)
+        before = len(ThreadStarter.open_starters())
+        await transport.connect()
+        lease = ThreadStarterLease(lambda: server.thread_starter)
+        ran = threading.Event()
+        lease.start(target=ran.set, name="invpw-test-started")
+        assert ran.wait(10)
+        opened = len(ThreadStarter.open_starters()) - before
+        transport.request_stop()
+        await asyncio.wait_for(transport.wait_until_stopped(), 10)
+        return opened
+
+    assert asyncio.run(scenario()) == 1
