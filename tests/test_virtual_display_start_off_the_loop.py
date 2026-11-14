@@ -123,3 +123,55 @@ def test_a_launch_cancelled_during_the_display_start_leaves_no_display(slow):
 
     asyncio.run(run())
     assert slow.stopped == 1, "a display started for a cancelled launch was left running"
+
+
+# -- one decision for both APIs ----------------------------------------------
+
+class QuickDisplay:
+    def __init__(self) -> None:
+        self.started = 0
+
+    def start(self) -> None:
+        self.started += 1
+
+    def stop(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize("headless", [False, True])
+@pytest.mark.parametrize("true_headless", [False, True])
+@pytest.mark.parametrize("platform_has_display", [True, False])
+def test_sync_and_async_make_the_same_decision(monkeypatch, headless, true_headless,
+                                               platform_has_display):
+    """The same inputs give the same answer, the same display and the same
+    started/recorded facts on both paths: the decision lives in one function."""
+    from invisible_playwright import launcher
+
+    if true_headless:
+        monkeypatch.setenv(_session.TRUE_HEADLESS_ENV, "1")
+    else:
+        monkeypatch.delenv(_session.TRUE_HEADLESS_ENV, raising=False)
+    monkeypatch.setattr(
+        _session, "make_virtual_display",
+        lambda: QuickDisplay() if platform_has_display else None)
+
+    def outcome(session, result):
+        vd = session._virtual_display
+        return (result, vd is not None, vd.started if vd is not None else None)
+
+    sync = launcher.InvisiblePlaywright(seed=7, headless=headless)
+    got_sync = outcome(sync, sync._resolve_headless())
+
+    use = async_api.InvisiblePlaywright(seed=7, headless=headless)
+    got_async = outcome(use, asyncio.run(use._resolve_headless_async()))
+
+    assert got_sync == got_async
+    # And the decision itself, for the record.
+    if not headless:
+        assert got_sync == (False, False, None)
+    elif true_headless:
+        assert got_sync == (True, False, None)
+    elif platform_has_display:
+        assert got_sync == (False, True, 1)
+    else:
+        assert got_sync == (False, False, None)

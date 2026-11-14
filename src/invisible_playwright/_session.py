@@ -437,19 +437,32 @@ class CommonLaunch:
         ``self._virtual_display`` is the fact ``_build_prefs`` reads to decide
         whether the desktop workarounds apply (B172).
         """
+        pw_headless, vd = self._plan_headless()
+        if vd is not None:
+            vd.start()
+            self._virtual_display = vd
+        return pw_headless
+
+    def _plan_headless(self) -> "tuple[bool, Any]":
+        """THE decision, made once for both APIs: ``(pw_headless, display)``.
+
+        ``pw_headless`` is what Playwright is told; ``display`` is the hidden
+        surface the caller must START (and then record in
+        ``self._virtual_display``, which `_build_prefs` reads), or None when
+        none is wanted: headless off, true headless asked for, or a platform
+        with no display to make. The two callers only decide WHERE the start
+        runs - inline in the sync client, in a worker in the async one - so
+        the decision cannot drift between them (B172 was one such drift).
+        """
         if not self._headless:
-            return False
+            return False, None
         # Opt-in TRUE headless, shared with the async class. It existed on the
         # async API ONLY until 2026-07-27: a documented env var that worked
         # depending on which entry point the caller happened to pick, which is
         # the same drift that shipped the process-leak fix to half the users.
         if true_headless_requested():
-            return True
-        vd = make_virtual_display()
-        if vd is not None:
-            vd.start()
-            self._virtual_display = vd
-        return False
+            return True, None
+        return False, make_virtual_display()
 
     async def _resolve_headless_async(self) -> bool:
         """`_resolve_headless` for the async API: the display starts in a worker.
@@ -462,13 +475,9 @@ class CommonLaunch:
         are composed; only the thread changes. The sync API keeps the direct
         call: nothing else runs on its thread.
         """
-        if not self._headless:
-            return False
-        if true_headless_requested():
-            return True
-        vd = make_virtual_display()
+        pw_headless, vd = self._plan_headless()
         if vd is None:
-            return False
+            return pw_headless
         started = asyncio.ensure_future(asyncio.to_thread(vd.start))
         try:
             await asyncio.shield(started)
@@ -484,7 +493,7 @@ class CommonLaunch:
             started.add_done_callback(release)
             raise
         self._virtual_display = vd
-        return False
+        return pw_headless
 
     def _default_context_kwargs(self) -> Dict[str, Any]:
         # The screen and viewport in CSS pixels, derived once in the core:
