@@ -11,7 +11,10 @@ The wrapper runs Fission the way retail Firefox does (strategy 1, one content pr
 frame of B inside a page of A runs in another process.
 
 `assert_other_process` is how a test proves that, from inside the pages and with no help from the driver: the
-frame spins for 600 ms and the observer frame times a 10 ms timer, which stalls only when the two share a process.
+frame spins for 600 ms and the observer frame ticks a 10 ms timer: a tick that runs INSIDE the spin proves the two do
+not share a process (one thread cannot tick while it spins), and no amount of load can fake that. The absence of ticks
+proves nothing on a loaded machine (the observer may be starved for the whole spin), so the spin is repeated, up to six
+times, and the test is red only when no spin ever shows a tick inside it.
 A test file calls it at least once, so the suite cannot silently turn into a same-process suite.
 """
 from __future__ import annotations
@@ -28,10 +31,8 @@ from _servers import LocalServer
 
 HOSTS = {"A": "127.0.0.1", "B": "localhost", "C": "127.0.0.2"}
 
-#: How long the frame keeps its main thread busy, and the longest gap of the observer's timer that still means
-#: "another process" (a process shared with the frame is stalled for about the whole spin).
+#: How long the frame keeps its main thread busy.
 SPIN_MS = 600
-OWN_PROCESS_GAP_MS = 300
 
 HTML = "text/html; charset=utf-8"
 
@@ -165,32 +166,78 @@ def new_page(browser, **context_kwargs):
     return context, page
 
 
-def longest_timer_gap(observer, frame, spin_ms=SPIN_MS):
-    """Make ``frame`` spin for ``spin_ms`` and return the longest gap (ms) between two ticks of a 10 ms timer that
-    ``observer`` (a frame) runs meanwhile."""
+def spin_trial(observer, frame, spin_ms=SPIN_MS):
+    """Make ``frame`` spin for ``spin_ms`` while ``observer`` (a frame) ticks a 10 ms timer, and return
+    ``(ticks, window)``: the wall-clock time (ms) of every tick, and the ``(start, end)`` of the spin, both read
+    from ``Date.now()`` (one clock for every process)."""
     observer.evaluate("""() => {
-        window.__gap = 0;
-        let last = performance.now();
-        window.__tick = setInterval(() => {
-            const now = performance.now();
-            window.__gap = Math.max(window.__gap, now - last);
-            last = now;
-        }, 10);
+        window.__ticks = [];
+        window.__tick = setInterval(() => window.__ticks.push(Date.now()), 10);
     }""")
-    frame.evaluate("""(ms) => { setTimeout(() => {
+    frame.evaluate("""(ms) => { window.__spin = null; setTimeout(() => {
+        const start = Date.now();
         const end = performance.now() + ms;
         while (performance.now() < end) { /* spin */ }
+        window.__spin = [start, Date.now()];
     }, 50); }""", spin_ms)
     observer.page.wait_for_timeout(spin_ms + 800)
-    return observer.evaluate("() => { clearInterval(window.__tick); return window.__gap; }")
+    ticks = observer.evaluate("() => { clearInterval(window.__tick); return window.__ticks; }")
+    window = wait_for_value(observer.page, lambda: frame.evaluate("window.__spin"))
+    return ticks, window
+
+
+def wait_for_value(page, read, seconds=20.0):
+    """``read()`` once it is not None, with the client's events being read; None if it never is."""
+    end = time.monotonic() + seconds
+    value = read()
+    while value is None and time.monotonic() < end:
+        page.wait_for_timeout(100)
+        value = read()
+    return value
+
+
+#: A tick counts as "inside" the spin when it is this far (ms) from both ends of it, and the spin must hold this
+#: many of them. A page that shares the frame's process runs no tick in the spin at all.
+INSIDE_MARGIN_MS = 10
+INSIDE_TICKS = 3
+
+
+def ticks_inside(ticks, window):
+    """How many ``ticks`` ran strictly inside the spin ``window`` (start, end)."""
+    if window is None:
+        return 0
+    start, end = window
+    return sum(1 for tick in ticks if start + INSIDE_MARGIN_MS < tick < end - INSIDE_MARGIN_MS)
+
+
+def other_process_proved(trials):
+    """Whether any trial ``(ticks, window)`` shows the observer running while the frame spun.
+
+    The proof is one-sided on purpose. A frame that shares the observer's process spins ON the observer's thread, so
+    no tick of the observer can run between the start and the end of the spin: in every trial, whatever the load,
+    zero ticks are inside. A frame in another process leaves the observer free, and ticks run inside the spin unless
+    the machine happens to starve the observer for the whole spin; a loaded machine does that now and then (stalls of
+    2 s have been seen between two processes), so a trial where no tick ran says nothing, and the test asks again.
+    What it cannot be is wrong the other way: a tick inside a spin is impossible in one process."""
+    return any(ticks_inside(ticks, window) >= INSIDE_TICKS for ticks, window in trials)
+
+
+TRIALS = 6
 
 
 def assert_other_process(observer, frame):
-    """``frame`` runs in a process of its own, not the one of ``observer``: a spin in it does not stall the timer."""
-    gap = longest_timer_gap(observer, frame)
-    assert gap < OWN_PROCESS_GAP_MS, (
-        "the frame at %s shares the process of the observer at %s: a %d ms spin stalled the observer's timer for "
-        "%.0f ms" % (frame.url, observer.url, SPIN_MS, gap))
+    """``frame`` runs in a process of its own, not the one of ``observer``: the observer's timer ticks while the frame
+    spins. Up to ``TRIALS`` spins (the first that shows ticks inside it is enough; a healthy machine needs one)."""
+    trials = []
+    for _ in range(TRIALS):
+        trials.append(spin_trial(observer, frame))
+        if other_process_proved(trials):
+            return
+    assert False, (
+        "the frame at %s shares the process of the observer at %s: in %d spins of %d ms the observer's 10 ms timer never "
+        "ticked inside a spin (a frame of another process leaves it free; here: ticks inside, ticks in all, spin ms) %s" % (
+            frame.url, observer.url, TRIALS, SPIN_MS,
+            [(ticks_inside(t, w), len(t), (w[1] - w[0]) if w else None) for t, w in trials]))
 
 
 def js(value):

@@ -16,6 +16,7 @@ import asyncio
 
 import pytest
 
+import _fission_frames as ff
 import _turn_chain as chain_mod
 from _waits import Timeline, awatch, quiet_problem, spare_processes, wait_until, watch, without_end
 
@@ -207,3 +208,63 @@ def test_the_turn_page_stops_its_tick_before_the_post_not_after_it():
     assert "clearInterval" not in after_post
     # the tick still ends a page that gets no srflx
     assert "finish('TIMEOUT')" in page[:page.index("pc.onicecandidate")]
+
+
+# ---------------------------------------------------------------------------
+# the proof that a frame is in another process (_fission_frames.assert_other_process)
+# ---------------------------------------------------------------------------
+
+def _ticks(start, end, every=10):
+    return list(range(start, end, every))
+
+
+def _same_process_trial(load_ms=0):
+    """A frame that shares the observer's thread: its spin 1000..1600 takes the thread, so the observer's ticks stop for
+    the whole spin (and for ``load_ms`` more when the machine is loaded)."""
+    return _ticks(0, 1000) + _ticks(1600 + load_ms, 3000), (1000, 1600)
+
+
+def _other_process_trial(starved=False):
+    """A frame in another process: the observer ticks all along, unless the machine starves it for the whole spin."""
+    if starved:
+        return _ticks(0, 990) + _ticks(3500, 4500), (1000, 1600)     # 2.5 s stall, like the one seen on Windows
+    return _ticks(0, 3000), (1000, 1600)
+
+
+def test_no_tick_runs_inside_the_spin_of_a_frame_that_shares_the_process_whatever_the_load():
+    for load in (0, 50, 800, 2500):
+        trial = _same_process_trial(load)
+        assert ff.ticks_inside(*trial) == 0
+    assert not ff.other_process_proved([_same_process_trial(load) for load in (0, 200, 2500)] * 2)
+    assert ff.ticks_inside([5, 10], None) == 0
+
+
+def test_a_frame_of_another_process_is_proved_by_one_healthy_spin_even_after_starved_ones():
+    assert ff.ticks_inside(*_other_process_trial()) > 50
+    assert ff.other_process_proved([_other_process_trial()])
+    # a loaded machine: the observer was starved for two whole spins, then ran: still proved
+    assert ff.other_process_proved([_other_process_trial(True), _other_process_trial(True), _other_process_trial()])
+    # starved every time: nothing is proved (the old gap criterion called this "same process" at the first stall)
+    assert not ff.other_process_proved([_other_process_trial(True)] * 3)
+
+
+def test_a_frame_that_shares_the_process_keeps_the_assertion_red_and_one_that_does_not_keeps_it_green(monkeypatch):
+    class Frame:
+        url = "http://127.0.0.2:1/grid"
+
+    class Observer:
+        url = "http://localhost:1/grid"
+
+    monkeypatch.setattr(ff, "spin_trial", lambda observer, frame: _same_process_trial(2500))
+    with pytest.raises(AssertionError) as red:
+        ff.assert_other_process(Observer(), Frame())
+    assert "shares the process of the observer" in str(red.value) and "(0, " in str(red.value)
+    calls = []
+
+    def starved_then_healthy(observer, frame):
+        calls.append(1)
+        return _other_process_trial(starved=len(calls) < 3)
+
+    monkeypatch.setattr(ff, "spin_trial", starved_then_healthy)
+    ff.assert_other_process(Observer(), Frame())
+    assert len(calls) == 3
