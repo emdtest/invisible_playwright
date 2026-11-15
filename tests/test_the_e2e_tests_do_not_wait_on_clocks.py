@@ -348,6 +348,15 @@ def test_the_debt_is_made_again_from_the_sources_and_an_entry_is_never_made():
     assert clocks.dump(after) == clocks.dump(clocks.regenerate(after, found)) and clocks.dump(after).endswith("}\n")
 
 
+def test_a_reason_a_person_wrote_on_a_debt_item_stays_while_the_occurrence_is_there():
+    found = clocks.analyze(fake("def test_x(page):\n    page.wait_for_timeout(100)\n"), "test_fake_e2e.py")
+    waiting = {"file": "test_fake_e2e.py", "scope": "test_x", "rule": "sleep", "nth": 1, "class": "A",
+               "reason": "Waiting for the verdict on the product: the strict form of this test is on its own branch."}
+    after = clocks.regenerate({"version": 1, "entries": [], "debt": [waiting]}, found)
+    assert after["debt"] == [waiting], "--write kept the written reason"
+    assert clocks.regenerate({"version": 1, "entries": [], "debt": [waiting]}, [])["debt"] == [], "and drops it with the occurrence"
+
+
 def test_every_rule_has_a_known_bad_case_in_this_file():
     this = Path(__file__).read_text(encoding="utf-8")
     for rule in clocks.RULES:

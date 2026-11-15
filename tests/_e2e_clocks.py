@@ -731,6 +731,10 @@ def regenerate(document: Dict[str, object], found: Iterable[Violation], *, prune
     if prune_entries:
         entries = [i for i in entries if key_of(i) in seen]
     covered = {key_of(i) for i in entries}
-    debt = [{"file": v.file, "scope": v.scope, "rule": v.rule, "nth": v.nth, "class": v.klass, "reason": DEBT_REASON[v.rule]}
+    # A debt item whose reason a person wrote (why it is not corrected YET, e.g. "waiting for the verdict on the product") keeps it while the
+    # occurrence is there; every other one gets the reason of its rule.
+    written = {key_of(i): i["reason"] for i in document.get("debt", [])  # type: ignore[union-attr]
+               if i.get("reason") and i["reason"] != DEBT_REASON.get(i.get("rule", ""))}
+    debt = [{"file": v.file, "scope": v.scope, "rule": v.rule, "nth": v.nth, "class": v.klass, "reason": written.get(v.key, DEBT_REASON[v.rule])}
             for v in sorted(found, key=lambda v: v.key) if v.key not in covered]
     return {"version": document.get("version", 1), "entries": entries, "debt": debt}
