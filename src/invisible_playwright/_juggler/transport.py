@@ -43,6 +43,7 @@ names the guid it creates, and that is the dispatcher's job, not the pool's.
 """
 from __future__ import annotations
 
+import _thread as _raw_thread
 import asyncio
 import os
 import queue
@@ -50,6 +51,7 @@ import threading
 import traceback
 from typing import Any, Dict, Optional
 
+from invisible_core._offloop import off_the_loop
 from invisible_playwright._pw._impl._helper import parse_error
 from invisible_playwright._pw._impl._transport import Transport
 
@@ -101,6 +103,10 @@ class InProcessTransport(Transport):
         self._stopped = threading.Event()
         self._stopped_future: asyncio.Future = loop.create_future()
         self._threads: list = []
+        #: The thread that runs the server's shutdown (see `request_stop`); None until the stop is requested.
+        self._shutdown_thread: Optional[threading.Thread] = None
+        #: Set once the raw thread has begun (or failed to begin) the shutdown thread, so the join below knows whether to wait.
+        self._shutdown_begun = threading.Event()
         server.attach(self)
 
     # ── the five methods the seam declares ──────────────────────────────────
@@ -131,6 +137,14 @@ class InProcessTransport(Transport):
         await self._stopped_future
 
     def request_stop(self) -> None:
+        """⛔ THE SERVER'S SHUTDOWN IS NOT RUN BY THE CALLER, and the caller is usually the user's event loop. `server.shutdown()` runs the
+        hooks of the session (the engine's `conn.close`, which waits for its processes to exit) and then the removal of its directories:
+        seconds of waiting, and on the loop they stopped every other browser of the process for as long as they took (measured with
+        four browsers in one process). It runs on a thread of its own, NOT a daemon: a close that the interpreter's exit could cut short
+        is a browser left half closed, a leak. `wait_until_stopped` is where it is waited for, and off the loop too.
+
+        The thread is begun by a raw thread, as the server's starter is: `Thread.start` does not return until the new thread runs, and
+        that wait on a loaded machine is the loop's own (see `connect`)."""
         if self._stopped.is_set():
             return
         self._stopped.set()
@@ -138,23 +152,58 @@ class InProcessTransport(Transport):
         # a flag.
         for _ in self._threads:
             self._queue.put(None)
+
+        def shutdown() -> None:
+            try:
+                self._server.shutdown()
+            except Exception:
+                pass
+            finally:
+                # The stop is settled when the shutdown has ended, as it always was: `run` returns after the hooks.
+                try:
+                    self._loop.call_soon_threadsafe(self._settle)
+                except RuntimeError:
+                    pass              # the loop is closed: nobody waits for the stop any more
+
+        thread = threading.Thread(target=shutdown, name="juggler-shutdown")
+        self._shutdown_thread = thread
+        # Not through the server's `ThreadStarter`: `Server.shutdown` stops it, and a starter that has stopped drops what it is handed,
+        # which here would be the shutdown itself. A raw thread begins this one (the caller returns at once).
         try:
-            self._server.shutdown()
-        except Exception:
-            pass
-        if not self._stopped_future.done():
-            self._loop.call_soon_threadsafe(self._settle)
+            _raw_thread.start_new_thread(self._begin, (thread, shutdown))
+        except RuntimeError:
+            self._shutdown_begun.set()
+            shutdown()                # no thread can be made: the shutdown still has to happen, as it did before
+
+    def _begin(self, thread: threading.Thread, shutdown: Any) -> None:
+        try:
+            thread.start()
+        except BaseException:
+            self._shutdown_begun.set()
+            shutdown()                # on this raw thread, which is not the loop's
+        else:
+            self._shutdown_begun.set()
 
     def _settle(self) -> None:
         if not self._stopped_future.done():
             self._stopped_future.set_result(None)
 
-    async def wait_until_stopped(self) -> None:
-        await self._stopped_future
+    def _join_workers(self) -> None:
+        """What `wait_until_stopped` waits for besides the stop itself: the workers (and the shutdown thread, which has settled the stop
+        and is ending). Blocking, so never on the loop."""
         for t in self._threads:
             # A worker the starter never started (the transport stopped first) has nothing to join.
             if t.is_alive():
                 t.join(timeout=5)
+        shutdown = self._shutdown_thread
+        if shutdown is not None:
+            self._shutdown_begun.wait(5)  # the raw thread that begins it may be a moment late
+            if shutdown.is_alive():
+                shutdown.join(timeout=5)
+
+    async def wait_until_stopped(self) -> None:
+        await self._stopped_future
+        await off_the_loop(self._join_workers)
 
     def send(self, message: Dict) -> None:
         """⛔ ENQUEUE ONLY. Running the operation here would run it on the
