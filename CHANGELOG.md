@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `connect()` starts no thread on the event loop (#497).
   - The virtual display of `headless=True` starts off the event loop (#499).
   - Closing a browser waits for its processes and removes its profile without holding the loop that serves the others:
-    with four browsers in one process the loop was held for up to about 0.5 s per close, and is not held now.
+    with four browsers in one process the loop was held for up to about 0.5 s per close, and is not held now (#503).
 - Comments, the fork notes and one test message no longer point at scripts that were deleted (the transport comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes. (#458)
 
 ### Added
