@@ -15,6 +15,7 @@ from invisible_core._fpforge import Profile, generate_profile
 from invisible_core import SessionLocale, persona_cookies, prepare_session_geo, record_session_seed, resolve_session_seed
 from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
+from invisible_core._offloop import off_the_loop
 from ._reaper import SessionToken, guard_for
 
 
@@ -129,7 +130,7 @@ class InvisiblePlaywright(_session.CommonLaunch):
             # the REAL result of _resolve_headless (did it create an
             # alternate desktop or not?) must be known BEFORE composing the
             # prefs, not after: B172, 2026-08-24.
-            pw_headless = self._resolve_headless()
+            pw_headless = await self._resolve_headless_async()
             prefs = self._build_prefs()
             playwright_proxy = _configure_proxy_shared(self._proxy, prefs)
             self._session_token = SessionToken.mint()
@@ -153,7 +154,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
                     env=env,
                     **self._default_context_kwargs(),
                 )
-                self._bind_process_tree()
                 self._arm_cursor_engine(self._persistent_context)
                 return self._persistent_context
             self._browser = await self._pw.firefox.launch(
@@ -167,7 +167,6 @@ class InvisiblePlaywright(_session.CommonLaunch):
             # See the sync launcher: browser.version comes from the connection
             # initializer, costs no round trip, and cannot be spoofed by a pref.
             assert_wire_version(self._browser)
-            self._bind_process_tree()
         except BaseException:
             await self._teardown()
             raise
@@ -351,18 +350,18 @@ class InvisiblePlaywright(_session.CommonLaunch):
             if self._pw is not None:
                 await close(self._pw.stop())
                 self._pw = None
-            if self._virtual_display is not None:
-                # Synchronous, so it cannot be cancelled mid-call the way the
-                # three awaits above can.
-                try:
-                    self._virtual_display.stop()
-                except Exception:
-                    pass
-                self._virtual_display = None
+            display = self._take_display()
+            if display is not None:
+                # Off the loop like its start (`_resolve_headless_async`): a cancellation stops the waiting, not the stop.
+                await close(off_the_loop(display.stop))
         finally:
             if self._session_token:
+                # ⛔ NOT ON THE LOOP: `reap` waits for the tree of the session to be gone. It runs in a thread of its own
+                # (`off_the_loop`); a cancellation of this task stops the waiting and not the reaping, which runs to its end.
                 try:
-                    self._lifetime_guard.reap(self._session_token)
+                    await off_the_loop(self._lifetime_guard.reap, self._session_token)
+                except asyncio.CancelledError as stop:
+                    cancelled = stop
                 except Exception:
                     pass
                 self._session_token = SessionToken()

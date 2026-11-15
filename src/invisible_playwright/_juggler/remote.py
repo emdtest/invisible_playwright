@@ -837,7 +837,6 @@ def launch_server(host: str = DEFAULT_HOST, port: int = 0, *,
         LocalUtilsDispatcher(server)
         browser = server.object(
             browser_type.op_launch(params)["browser"]["guid"])
-        session._bind_process_tree()
 
         class _Reported:  # what assert_wire_version reads off a Browser
             version = browser.initializer.get("version", "")

@@ -32,7 +32,7 @@ import pytest
 
 from _host_address import this_host_address
 from _socks_servers import MEASURE_NUMBER, STUN_PORT, Socks5TcpOnly
-from _udp_line import declared_udp, egress_by_proxy, measure_servers
+from _udp_line import bench_report, declared_udp, declared_udp_or_absent, egress_by_proxy, measure_servers
 
 # ──────────────────────────────────────────────────────────────────────────
 #  Pure SDP / ICE-candidate helpers (no I/O) - the heart of the sentinels.
@@ -438,11 +438,14 @@ def _gather_behind_a_coherent_gateway(monkeypatch, credentials, ice_prefs, rtt_m
         carried = [(host, port) for host, port, _payload in gateway.datagrams]
         stun_requests = gateway.stun.requests
         associates = gateway.associates
+        # What the bench saw, taken before the gateway closes: its send errors, CONNECTs, accepted connections, associations and the
+        # datagrams with their times, and what the core declared for this proxy (absent when its measure never finished).
+        bench = bench_report(gateway, rtt_ms, declared_udp_or_absent(gateway.proxy, measure_servers(gateway)))
     srflx = [c for c in srflx_candidates(candidates(res["candidates"])) if c["address"] == exit_ip]
     verdict = (f"srflx with the gateway's exit {exit_ip}: {srflx}; candidates: {res['candidates']}; "
                f"ICE errors: {res['errors']}; gather timings (ms from the offer): {res['at_ms']}; "
                f"datagrams the relay carried: {carried}; STUN requests the server answered: {stun_requests}; "
-               f"UDP ASSOCIATEs the gateway saw: {associates}; round trip to the gateway: {rtt_ms} ms")
+               f"UDP ASSOCIATEs the gateway saw: {associates}; round trip to the gateway: {rtt_ms} ms; {bench}")
     return bool(srflx) and (STUN_NUMBER, STUN_PORT) in carried, verdict, res["at_ms"]
 
 
