@@ -97,6 +97,11 @@ class FakeStun:
         # On the address the relay sends from: Windows sends neither from an address of the host to loopback (WinError 10049) nor
         # from loopback to an address of the host (10051), so a relay that leaves from the host's address needs its STUN there too.
         self._sock.bind((bind_host, 0))
+        self._closing = False
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Windows: an ICMP "port unreachable" to an answer (a client that already closed its socket) makes the NEXT recvfrom raise
+            # WinError 10054; left on, the server that reads would end there and answer nobody afterwards. Off, as a real server has it.
+            self._sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         self.address: Tuple[str, int] = self._sock.getsockname()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -105,6 +110,8 @@ class FakeStun:
         while True:
             try:
                 data, peer = self._sock.recvfrom(2048)
+            except ConnectionResetError:
+                continue                # an earlier answer found nobody: that is that client's business, not the server's end
             except OSError:
                 return
             if len(data) < 20 or data[0:2] != b"\x00\x01":
@@ -118,9 +125,12 @@ class FakeStun:
             try:
                 self._sock.sendto(resp, peer)
             except OSError:
-                return
+                if self._closing:
+                    return
+                continue                # a send that failed (the peer is gone) does not end the server for the next client
 
     def close(self) -> None:
+        self._closing = True
         self._sock.close()
 
 
@@ -433,6 +443,12 @@ class Gateway:
             self._deliver(relay, client[0], host, port, data)
 
         def inbound() -> None:  # client -> world
+            # The port of the exit socket is read ONCE: asked at every datagram it fell on a socket the teardown had already closed
+            # (OSError WinError 10038 in a thread nobody joins). An OSError of the body is the association ending, not a failure.
+            try:
+                out_port = out.getsockname()[1]
+            except OSError:
+                return
             while True:
                 try:
                     d, peer = relay.recvfrom(65536)
@@ -440,28 +456,31 @@ class Gateway:
                     continue
                 except OSError:
                     return
-                if len(d) < 10 or d[2] != 0:
-                    continue
-                client[0] = peer
-                atyp, i = d[3], 4
-                if atyp == 1:
-                    host, i = socket.inet_ntoa(d[i:i + 4]), i + 4
-                elif atyp == 3:
-                    n = d[i]
-                    host, i = d[i + 1:i + 1 + n].decode(), i + 1 + n
-                else:
-                    host, i = socket.inet_ntop(socket.AF_INET6, d[i:i + 16]), i + 16
-                dport = struct.unpack("!H", d[i:i + 2])[0]
-                payload = d[i + 2:]
-                self.datagrams.append((host, dport, payload))
-                self.datagram_log.append((host, dport, atyp, time.monotonic() - self.t0))
-                routed = self._route(host, dport, atyp, payload, out.getsockname()[1], answer)
-                if routed is None:
-                    continue
-                target, reported = routed
-                if reported is not None:
-                    asked_at[target] = reported
-                self._later(lambda p=payload, t=target: out.sendto(p, t), "the datagram to %s:%d" % target)
+                try:
+                    if len(d) < 10 or d[2] != 0:
+                        continue
+                    client[0] = peer
+                    atyp, i = d[3], 4
+                    if atyp == 1:
+                        host, i = socket.inet_ntoa(d[i:i + 4]), i + 4
+                    elif atyp == 3:
+                        n = d[i]
+                        host, i = d[i + 1:i + 1 + n].decode(), i + 1 + n
+                    else:
+                        host, i = socket.inet_ntop(socket.AF_INET6, d[i:i + 16]), i + 16
+                    dport = struct.unpack("!H", d[i:i + 2])[0]
+                    payload = d[i + 2:]
+                    self.datagrams.append((host, dport, payload))
+                    self.datagram_log.append((host, dport, atyp, time.monotonic() - self.t0))
+                    routed = self._route(host, dport, atyp, payload, out_port, answer)
+                    if routed is None:
+                        continue
+                    target, reported = routed
+                    if reported is not None:
+                        asked_at[target] = reported
+                    self._later(lambda p=payload, t=target: out.sendto(p, t), "the datagram to %s:%d" % target)
+                except OSError:
+                    return
 
         def outbound() -> None:  # world -> client
             while True:
