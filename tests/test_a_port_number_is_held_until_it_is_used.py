@@ -1,15 +1,10 @@
-"""Where the window of ``tests/_ports.py`` is, shown on real loopback sockets, and the picker that has none.
+"""A port number of the harness is held on TCP and on UDP from the first look at it to its use, shown on real loopback sockets.
 
-``bind_tcp_and_probe_udp`` proves that a number binds on TCP and on UDP, keeps the TCP server and CLOSES the UDP probe: "whoever needs the UDP
-socket binds it next" (the HTTP/3 server does, after it has made its certificate and started its loop). From the return to that bind the number is
-held on TCP only:
-
-* another picker of the harness cannot take it (every picker binds TCP first, and the number is listening),
-* but any bind of that UDP number can: the system's own pick of an ephemeral UDP port for another process, a socket somebody opens on it. Then the
-  caller's bind is refused (EADDRINUSE / WinError 10048) in a test that did nothing wrong.
-
-``bind_tcp_and_hold_udp`` is the same picker that keeps the UDP socket, so the number is held on both until the caller uses it. The first tests
-below show the window (the contract of the probe variant, which its docstring states), the last ones the picker without it. No browser.
+The picker used to prove that a number binds on UDP, keep the TCP server and CLOSE the UDP probe ("whoever needs the UDP socket binds it next":
+the HTTP/3 server did, after it had read its certificate and started its loop). In that window the number was held on TCP only: another picker of
+the harness could not take it (every picker binds TCP first), but any other bind of that UDP number could, the system's own pick of an ephemeral
+UDP port for another process first among them, and the caller's bind was refused (EADDRINUSE / WinError 10048) in a test that did nothing wrong.
+``bind_tcp_and_hold_udp`` returns the UDP socket too; the caller owns it. No browser.
 """
 from __future__ import annotations
 
@@ -42,28 +37,6 @@ def _udp_bind(port):
         sock.close()
         raise
     return sock
-
-
-def test_the_probe_variant_leaves_the_udp_number_to_whoever_binds_it_first():
-    tcp, port = _ports.bind_tcp_and_probe_udp(ADDRESS, _tcp)
-    try:
-        third_party = _udp_bind(port)           # the window: the number is not held on UDP any more
-        try:
-            with pytest.raises(OSError):
-                _udp_bind(port)                 # and the caller who comes next is refused
-        finally:
-            third_party.close()
-    finally:
-        tcp.server_close()
-
-
-def test_the_probe_variant_still_holds_the_tcp_side_against_another_picker():
-    tcp, port = _ports.bind_tcp_and_probe_udp(ADDRESS, _tcp)
-    try:
-        with pytest.raises(OSError):
-            _tcp(ADDRESS, port)
-    finally:
-        tcp.server_close()
 
 
 def test_the_hold_variant_keeps_the_number_on_udp_and_tcp_until_the_caller_uses_it():
