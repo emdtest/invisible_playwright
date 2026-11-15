@@ -114,6 +114,8 @@ class FakeStun:
                 continue                # an earlier answer found nobody: that is that client's business, not the server's end
             except OSError:
                 return
+            if self._closing:
+                return                  # the datagram `close` sent to wake this thread, or one that came after it
             if len(data) < 20 or data[0:2] != b"\x00\x01":
                 continue
             self.requests += 1
@@ -130,7 +132,20 @@ class FakeStun:
                 continue                # a send that failed (the peer is gone) does not end the server for the next client
 
     def close(self) -> None:
+        """Ends the server and its thread. Closing the socket wakes a `recvfrom` blocked in another thread on Windows, not on Linux,
+        where the thread would stay blocked for the rest of the process: so the server first sends itself one datagram, which wakes the
+        thread to see `_closing`, waits for the thread, and only then closes the socket."""
         self._closing = True
+        try:
+            waker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                waker.sendto(b"", self.address)
+            finally:
+                waker.close()
+        except OSError:
+            pass
+        if self._thread is not threading.current_thread():
+            self._thread.join(timeout=2)
         self._sock.close()
 
 
