@@ -158,25 +158,40 @@ def test_an_iframe_refused_its_load_ends_it_and_its_error_page_is_a_navigation(f
         await page.evaluate(
             "(u) => { const f = document.createElement('iframe'); f.id = 'r'; f.src = u; document.body.appendChild(f); }",
             sites["at"]("b.test", "/x", 9))   # a port Firefox refuses
-        await page.wait_for_timeout(2500)
-        return [(f.url, f.name) for f in page.frames], events
 
-    frames, events = _run(firefox_binary, scenario)
-    assert frames[1][1] == "r", frames       # the error page's frame is named by its iframe, in whatever process
-    assert urlsplit(frames[1][0])[:2] == ("http", "b.test:9"), frames
+        def frames():
+            return [(f.url, f.name) for f in page.frames]
+
+        # until the error page's frame is there with its address (a condition, not 2.5 s: a loaded machine is slower)
+        seen = await awatch(frames, lambda found: len(found) == 2 and urlsplit(found[1][0])[:2] == ("http", "b.test:9"),
+                            DEADLINE, lambda: page.wait_for_timeout(100))
+        return frames(), events, seen.render()
+
+    frames, events, seen = _run(firefox_binary, scenario)
+    assert len(frames) == 2, "%r; the frames over time: %s" % (frames, seen)
+    assert frames[1][1] == "r", "%r; the frames over time: %s" % (frames, seen)   # named by its iframe, in whatever process
+    assert urlsplit(frames[1][0])[:2] == ("http", "b.test:9"), "%r; the frames over time: %s" % (frames, seen)
 
 
 def test_an_iframe_removed_while_it_loads_is_aborted_then_gone(firefox_binary, sites):
     async def scenario(page):
         await page.goto(sites["at"]("a.test", "/plain"))
+        counts = {"attached": 0, "detached": 0}
+        page.on("frameattached", lambda f: counts.__setitem__("attached", counts["attached"] + 1))
+        page.on("framedetached", lambda f: counts.__setitem__("detached", counts["detached"] + 1))
         await page.evaluate(
             "(u) => { const f = document.createElement('iframe'); f.id = 's'; f.src = u; document.body.appendChild(f);"
             " setTimeout(() => f.remove(), 1000); }", sites["at"]("b.test", "/slow-frame"))
-        await page.wait_for_timeout(5000)
-        return [f.url for f in page.frames]
+        # until the iframe has been attached AND detached and only the page is left (the removal comes 1 s after the
+        # insertion, whatever the machine: a test that only reads the list could read it before the frame existed)
+        seen = await awatch(lambda: (counts["attached"], counts["detached"], len(page.frames)),
+                            lambda state: state[0] >= 1 and state[1] >= 1 and state[2] == 1,
+                            DEADLINE + 2, lambda: page.wait_for_timeout(100))
+        return [f.url for f in page.frames], seen.render()
 
-    urls = _run(firefox_binary, scenario)
-    assert len(urls) == 1 and urls[0].startswith("http://a.test:"), urls
+    urls, seen = _run(firefox_binary, scenario)
+    assert len(urls) == 1 and urls[0].startswith("http://a.test:"), (
+        "%r; (frames attached, detached, listed) over time: %s" % (urls, seen))
 
 
 def test_an_iframe_whose_src_goes_to_another_site_shows_the_new_address(firefox_binary, sites):
