@@ -1,6 +1,6 @@
 {
  "os": "windows",
- "source": "GitHub Actions run 43652292533 (workflow 'cpu render path hunt vm', job on windows-2022), arm `ours` = the published engine firefox-64_159.0_20261114003728 with the core the branch installed from the index (before the declaration of software compositing), seed 42, locale en-US, timezone Europe/Rome, headless=True; launched twice, and the arm `ours_vmretail` (the VM decisions of the new core) twice more: every key below is equal in the four launches. `pngs`: the PNG keys, whose bytes differ in a 16-byte chunk `deBG` in every launch; their length, and the pixels they decode to where the hunt kept the bytes (a data URL longer than 3000 characters was kept as hash and length only: those five entries have no `sha256` and are written by the first run of tests/test_the_bytes_a_page_reads_do_not_change_e2e.py on the engine of the reference). The keys of c2d.scale.*, c2d.gradtext.*, gpu.webgpu.features and gpu.webgpu.limits were added to the probe after that run (in it the WebGPU read threw `Xray wrapping of iterators not supported`, key gpu.webgpu.error, dropped here) and are in no reference yet.",
+ "source": "GitHub Actions run 43661728392 (workflow page-bytes-reference-hunt, runner image win22 20261112.366.7), wrapper commit 455d5619e5, invisible-core 64.71.0, engine firefox-64_159.0_20261114003728, seed 42, locale en-US, timezone Europe/Rome, headless=True; 2 launches, every key below is equal in all of them. `pngs`: the PNG keys, compared on their length and decoded pixels because every PNG carries a per-launch chunk.",
  "keys": {
   "c2d.composite.getImageData": {
    "h": "df65ebe03bf31",
@@ -13,6 +13,10 @@
   "c2d.composite.webp": {
    "h": "182ab2238ae6c0",
    "n": 5431
+  },
+  "c2d.gradtext.getImageData": {
+   "h": "42edf4d4d5394",
+   "n": 352800
   },
   "c2d.image.getImageData": {
    "h": "8218d41a1794c",
@@ -33,6 +37,22 @@
   "c2d.offscreen.getImageData": {
    "h": "1d9666b372acb1",
    "n": 51200
+  },
+  "c2d.scale.high.getImageData": {
+   "h": "10d3beda5ba224",
+   "n": 114400
+  },
+  "c2d.scale.low.getImageData": {
+   "h": "10d3beda5ba224",
+   "n": 114400
+  },
+  "c2d.scale.medium.getImageData": {
+   "h": "10d3beda5ba224",
+   "n": 114400
+  },
+  "c2d.scale.off.getImageData": {
+   "h": "c673134829639",
+   "n": 114400
   },
   "c2d.shapes.getImageData": {
    "h": "18fe9a0f7336da",
@@ -259,8 +279,14 @@
   "gl2.unmasked": {
    "s": "[\"Google Inc. (Intel)\",\"ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar\"]"
   },
+  "gpu.webgpu.features": {
+   "s": "{\"depth-clip-control\":true,\"depth32float-stencil8\":true,\"texture-compression-bc\":true,\"texture-compression-bc-sliced-3d\":true,\"texture-compression-etc2\":false,\"texture-compression-astc\":false,\"texture-compression-astc-sliced-3d\":false,\"timestamp-query\":true,\"indirect-first-instance\":true,\"shader-f16\":true,\"rg11b10ufloat-renderable\":true,\"bgra8unorm-storage\":true,\"float32-filterable\":true,\"float32-blendable\":true,\"clip-distances\":false,\"dual-source-blending\":true,\"subgroups\":false}"
+  },
   "gpu.webgpu.info": {
    "s": "{\"vendor\":\"\",\"architecture\":\"\",\"device\":\"\",\"description\":\"\"}"
+  },
+  "gpu.webgpu.limits": {
+   "s": "{\"maxTextureDimension1D\":16384,\"maxTextureDimension2D\":16384,\"maxTextureDimension3D\":2048,\"maxTextureArrayLayers\":2048,\"maxBindGroups\":8,\"maxBindGroupsPlusVertexBuffers\":24,\"maxBindingsPerBindGroup\":4294967295,\"maxDynamicUniformBuffersPerPipelineLayout\":8,\"maxDynamicStorageBuffersPerPipelineLayout\":4,\"maxSampledTexturesPerShaderStage\":64,\"maxSamplersPerShaderStage\":64,\"maxStorageBuffersPerShaderStage\":64,\"maxStorageTexturesPerShaderStage\":64,\"maxUniformBuffersPerShaderStage\":64,\"maxUniformBufferBindingSize\":65536,\"maxStorageBufferBindingSize\":2147483644,\"minUniformBufferOffsetAlignment\":256,\"minStorageBufferOffsetAlignment\":32,\"maxVertexBuffers\":16,\"maxBufferSize\":2147483644,\"maxVertexAttributes\":30,\"maxVertexBufferArrayStride\":2048,\"maxInterStageShaderVariables\":31,\"maxColorAttachments\":8,\"maxColorAttachmentBytesPerSample\":128,\"maxComputeWorkgroupStorageSize\":32768,\"maxComputeInvocationsPerWorkgroup\":1024,\"maxComputeWorkgroupSizeX\":1024,\"maxComputeWorkgroupSizeY\":1024,\"maxComputeWorkgroupSizeZ\":64,\"maxComputeWorkgroupsPerDimension\":65535}"
   },
   "worker.webgl": {
    "s": "{\"vendor\":\"Mozilla\",\"renderer\":\"ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar\",\"unmasked\":[\"Google Inc. (Intel)\",\"ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar\"],\"exts\":[\"ANGLE_instanced_arrays\",\"EXT_blend_minmax\",\"EXT_clip_control\",\"EXT_color_buffer_half_float\",\"EXT_depth_clamp\",\"EXT_float_blend\",\"EXT_frag_depth\",\"EXT_polygon_offset_clamp\",\"EXT_shader_texture_lod\",\"EXT_sRGB\",\"EXT_texture_compression_bptc\",\"EXT_texture_compression_rgtc\",\"EXT_texture_filter_anisotropic\",\"EXT_texture_mirror_clamp_to_edge\",\"OES_element_index_uint\",\"OES_fbo_render_mipmap\",\"OES_standard_derivatives\",\"OES_texture_float\",\"OES_texture_float_linear\",\"OES_texture_half_float\",\"OES_texture_half_float_linear\",\"OES_vertex_array_object\",\"WEBGL_color_buffer_float\",\"WEBGL_compressed_texture_s3tc\",\"WEBGL_compressed_texture_s3tc_srgb\",\"WEBGL_debug_renderer_info\",\"WEBGL_debug_shaders\",\"WEBGL_depth_texture\",\"WEBGL_draw_buffers\",\"WEBGL_lose_context\",\"WEBGL_provoking_vertex\"],\"px\":[64,128,191,255,64,128,191,255,64,128,191,255,64,128,191,255]}"
@@ -281,8 +307,19 @@
    "ct": 6,
    "sha256": "fb585f18240eb1a787a5b146d6332a0376dae76f8c8716e99f68fbbf9eff905e"
   },
+  "c2d.gradtext.png": {
+   "n": 55210,
+   "w": 420,
+   "h": 210,
+   "ct": 6,
+   "sha256": "1ce15c9ea557be69b62b4893b148345a694a93222c721b1bbb21cdcedebba5a0"
+  },
   "c2d.image.png": {
-   "n": 19502
+   "n": 19502,
+   "w": 160,
+   "h": 120,
+   "ct": 6,
+   "sha256": "51bc3789f2e238dfbf8899eb7a965a4f04d3e0e7f2246b1bd3cfdc9597bd2a77"
   },
   "c2d.image.toBlob": {
    "n": 14610,
@@ -298,8 +335,40 @@
    "ct": 6,
    "sha256": "55b4c78cd7b05627e9b2767477d61063b6849a7636c5be2ce0a62c6a2c6c9cc4"
   },
+  "c2d.scale.high.png": {
+   "n": 47314,
+   "w": 220,
+   "h": 130,
+   "ct": 6,
+   "sha256": "8672b8676f90d662b4809e56c55da58e05be4e72b2f7c543b33da4bdafb0ce21"
+  },
+  "c2d.scale.low.png": {
+   "n": 47314,
+   "w": 220,
+   "h": 130,
+   "ct": 6,
+   "sha256": "8672b8676f90d662b4809e56c55da58e05be4e72b2f7c543b33da4bdafb0ce21"
+  },
+  "c2d.scale.medium.png": {
+   "n": 47314,
+   "w": 220,
+   "h": 130,
+   "ct": 6,
+   "sha256": "8672b8676f90d662b4809e56c55da58e05be4e72b2f7c543b33da4bdafb0ce21"
+  },
+  "c2d.scale.off.png": {
+   "n": 20890,
+   "w": 220,
+   "h": 130,
+   "ct": 6,
+   "sha256": "c28700e28636d69dfe9bf293fadebae1fdf970949ac90147836ab1837065f46d"
+  },
   "c2d.shapes.png": {
-   "n": 19226
+   "n": 19226,
+   "w": 256,
+   "h": 160,
+   "ct": 6,
+   "sha256": "89ee57c100f4682099bd3a5f2de56c5b31091dae253bd7e3db4f254fb8b9e6a3"
   },
   "c2d.shapes.toBlob": {
    "n": 14402,
@@ -309,7 +378,11 @@
    "sha256": "89ee57c100f4682099bd3a5f2de56c5b31091dae253bd7e3db4f254fb8b9e6a3"
   },
   "c2d.text.png": {
-   "n": 42670
+   "n": 42670,
+   "w": 520,
+   "h": 412,
+   "ct": 6,
+   "sha256": "93d6fc37d2263e52e7b1b46f77c65d9e607faf577eb7c255dc38cbce8b7d7602"
   },
   "c2d.text.toBlob": {
    "n": 31986,
@@ -319,10 +392,18 @@
    "sha256": "93d6fc37d2263e52e7b1b46f77c65d9e607faf577eb7c255dc38cbce8b7d7602"
   },
   "gl1.triangle.toDataURL": {
-   "n": 7474
+   "n": 7474,
+   "w": 96,
+   "h": 96,
+   "ct": 6,
+   "sha256": "9989d00c92e8ae035dede9b81b1c9942223799c0ccc4d4875c8eca9efaca776c"
   },
   "gl2.triangle.toDataURL": {
-   "n": 7474
+   "n": 7474,
+   "w": 96,
+   "h": 96,
+   "ct": 6,
+   "sha256": "9989d00c92e8ae035dede9b81b1c9942223799c0ccc4d4875c8eca9efaca776c"
   }
  }
 }
