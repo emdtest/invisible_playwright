@@ -10,7 +10,8 @@ site changes its process.
   navigation and `go_back()` restore the page with its frame of another site, and the frame answers `evaluate`.
   The outcome asserted is what stock Firefox does (see the docstrings).
 * Processes. A context whose page had frames of other sites leaves no content process behind once it is closed:
-  the count of web content processes under the engine, read after each of several such contexts, does not grow.
+  the count of web content processes under the engine, read after each of several such contexts, stays within the
+  pool of spare processes retail Firefox keeps (see the test).
 
 The first test proves the frame is in another process, so the file cannot turn into a same-process suite.
 """
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from _fission_frames import Sites, assert_other_process, launch, new_page, wait_for, wait_frame
+from _waits import spare_processes, watch
 
 pytestmark = pytest.mark.e2e
 
@@ -167,24 +169,67 @@ def _settled(engine_dir, seconds=2.0, limit=25.0):
     return last
 
 
+CONTEXTS = 5
+#: How long a count of processes may take to reach what it must be (a process starts or ends in well under a
+#: second; this is the only clock the verdict has).
+DEADLINE = 25.0
+
+
 def test_a_closed_context_with_frames_of_other_sites_leaves_no_content_process(firefox_binary, sites):
-    """Four contexts in a row, each with a page whose frames are on B and (nested) on C. The processes the frames
-    took are gone once the context is closed: the count after the last is no higher than the count after the
-    first (the engine keeps one spare process that the first context may take or leave)."""
+    """Five contexts in a row, each with a page whose frames are on B and (nested) on C. The processes the frames
+    took are gone once the context is closed.
+
+    What retail Firefox does, and so what is allowed: with Fission on it keeps a pool of preallocated content
+    processes, `dom.ipc.processPrelaunch.fission.number` of them (3 on desktop, 1 on a machine of 4 GB or less),
+    refilled one at a time after a page takes one (`_waits.spare_processes` has the source). So between two looks
+    the number of content processes moves by up to that pool and no more: after the first context is closed
+    (``counts[0]``) every later count is at most ``counts[0]`` plus the pool, and a frame process that is never
+    released grows the count by at least one per context, so it passes the bound within the five (a pool that is
+    emptier at the last look than at the first could hide it: the bound is as wide as the pool, no wider). While a context
+    is open the count rises above ``counts[0]``: the frames' processes are on top of a refilled pool.
+
+    Each count is a WAIT for that bound (up to 25 s), not a look after a fixed pause; the message gives the counts
+    over time of every context."""
+    import psutil
+
     sites.route("B", "/leak-b", "<!doctype html><title>b</title><iframe src='%s'></iframe>" % sites.url("C", "/h3"))
     sites.route("A", "/leak", "<!doctype html><title>leak</title><iframe id='b' src='%s'></iframe>"
                 % sites.url("B", "/leak-b"))
     engine_dir = str(Path(firefox_binary).resolve().parent)
+    spare = spare_processes(psutil.virtual_memory().total)
+
+    def number():
+        return len(_content_processes(engine_dir))
+
+    def pause():
+        time.sleep(0.25)
+
     with launch(firefox_binary) as browser:
-        counts, during = [], []
-        for _ in range(4):
+        counts, during, trail = [], [], []
+        for n in range(CONTEXTS):
             context, page = new_page(browser)
             page.goto(sites.url("A", "/leak"), wait_until="load")
             wait_frame(page, sites.url("C"), "/h3")
-            during.append(len(_settled(engine_dir)))
+            if not counts:
+                during.append(len(_settled(engine_dir)))
+                trail.append("context %d open: %d" % (n, during[-1]))
+            else:
+                opened = watch(number, lambda count: count > counts[0], DEADLINE, pause)
+                during.append(opened.history[-1][1])
+                trail.append("context %d open, waiting for more than %d: %s" % (n, counts[0], opened.render()))
+                assert opened.ok, (
+                    "the frames of other sites took no process of their own: %r while open, %r after; %s" % (
+                        during, counts, " | ".join(trail)))
             context.close()
-            counts.append(len(_settled(engine_dir)))
-        assert max(during) > counts[0], (
-            "the frames of other sites took no process of their own: %r while open, %r after" % (during, counts))
-        assert counts[-1] <= counts[0], "web content processes after each closed context: %r (open: %r)" % (
-            counts, during)
+            if not counts:
+                counts.append(len(_settled(engine_dir)))
+                trail.append("context %d closed: %d (the reference)" % (n, counts[0]))
+            else:
+                closed = watch(number, lambda count: count <= counts[0] + spare, DEADLINE, pause)
+                counts.append(closed.history[-1][1])
+                trail.append("context %d closed, waiting for at most %d (%d + a pool of %d): %s" % (
+                    n, counts[0] + spare, counts[0], spare, closed.render()))
+                assert closed.ok, (
+                    "web content processes after each closed context: %r (open: %r); more than the %d the first "
+                    "left plus the pool of %d the engine keeps: %s" % (counts, during, counts[0], spare,
+                                                                        " | ".join(trail)))
