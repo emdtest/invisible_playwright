@@ -41,7 +41,8 @@ class Sites:
 
     ``route(site, path, body, ...)`` registers a page; ``body`` is a string or bytes, or a function of the request
     that returns the same (the request is the handler: ``.headers``, ``.query``). ``requests`` lists what arrived,
-    as dicts with ``site``, ``path``, ``query``, ``method`` and ``headers``.
+    as dicts with ``site``, ``path``, ``query``, ``method``, ``headers``, and ``at`` / ``answered`` (``time.monotonic()`` when the
+    request arrived and when its answer was written, None if it never was).
     """
 
     def __init__(self):
@@ -63,8 +64,9 @@ class Sites:
                 site = self.server.site
                 length = int(self.headers.get("Content-Length") or 0)
                 self.body = self.rfile.read(length) if length else b""
-                sites.requests.append({"site": site, "path": url.path, "query": self.query,
-                                       "method": self.command, "headers": dict(self.headers)})
+                record = {"site": site, "path": url.path, "query": self.query, "method": self.command,
+                          "headers": dict(self.headers), "at": time.monotonic(), "answered": None}
+                sites.requests.append(record)
                 spec = sites._routes.get((site, url.path))
                 if spec is None:
                     self.send_response(404)
@@ -85,6 +87,7 @@ class Sites:
                         self.send_header(name, value)
                     self.end_headers()
                     self.wfile.write(body)
+                    record["answered"] = time.monotonic()
                 except OSError:
                     pass
 

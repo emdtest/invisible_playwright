@@ -23,6 +23,7 @@ first test proves the frame is not in the process of the page, so the file canno
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -168,18 +169,36 @@ def test_networkidle_waits_for_the_late_requests_of_a_frame_of_another_site(page
     """The frame makes a request 200 ms after it loads, and the next one as soon as that answers (the server holds
     each for 300 ms): there is never half a second without a request, so `networkidle` of the PAGE is not reached
     before both are done."""
-    chain = ("<!doctype html><title>late</title><script>window.__done = [];"
-             "addEventListener('load', () => setTimeout(() => fetch('/late/1').then(r => r.text())"
+    chain = ("<!doctype html><title>late</title><script>window.__done = []; window.__t = {};"
+             "addEventListener('load', () => { __t.load = Date.now(); setTimeout(() => { __t.fired = Date.now();"
+             "fetch('/late/1').then(r => r.text())"
              ".then(t => { __done.push(t); return fetch('/late/2'); }).then(r => r.text())"
-             ".then(t => __done.push(t)), 200));</script>")
+             ".then(t => __done.push(t)); }, 200); });</script>")
     sites.route("B", "/late-frame", chain)
     sites.route("B", "/late/1", "one", ctype="text/plain", delay=0.3)
     sites.route("B", "/late/2", "two", ctype="text/plain", delay=0.3)
     sites.route("A", "/late-top", '<!doctype html><title>late top</title>'
                 '<iframe src="%s" width="300" height="100"></iframe>' % sites.url("B", "/late-frame"))
+    began = time.monotonic()
     page.goto(sites.url("A", "/late-top"), wait_until="networkidle", timeout=30000)
+    idle, idle_wall = time.monotonic(), time.time() * 1000
     frame = wait_frame(page, sites.url("B"), "/late-frame")
-    assert frame.evaluate("window.__done") == ["one", "two"]
+    done, marks = frame.evaluate("window.__done"), frame.evaluate("window.__t")
+
+    def timeline():
+        # Every request of the scenario and the frame's own marks, in ms from the networkidle the client was given (negative =
+        # before it): a request that starts after it is a networkidle declared too early; a timer that fired late is the frame's.
+        rows = ["goto began %+.0f ms" % ((began - idle) * 1000)]
+        for r in sites.requests:
+            if r["path"] in ("/late-top", "/late-frame", "/late/1", "/late/2"):
+                rows.append("%s%s arrived %+.0f ms, answered %s" % (r["site"], r["path"], (r["at"] - idle) * 1000,
+                            "%+.0f ms" % ((r["answered"] - idle) * 1000) if r["answered"] else "never"))
+        for name in ("load", "fired"):
+            if name in marks:
+                rows.append("frame %s %+.0f ms" % (name, marks[name] - idle_wall))
+        return "; ".join(rows)
+
+    assert done == ["one", "two"], "networkidle came before the frame's late requests were done (%r): %s" % (done, timeline())
     page.wait_for_load_state("networkidle")
 
 
