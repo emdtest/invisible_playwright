@@ -324,11 +324,16 @@ def test_named_world_declared_after_oop_iframe(page, cross_site_loop, events, en
     from invisible_core.juggler.injected import UTILITY_WORLD
 
     page.goto(cross_site_loop["top"], wait_until="load")
-    wait_for(page, lambda: len(page.frames) >= 3)
-    page.wait_for_timeout(1000)
-    created = [e["params"] for e in events if e["method"] == "Runtime.executionContextCreated"]
-    default = {c["auxData"]["frameId"] for c in created if not c["auxData"].get("name")}
-    utility = {c["auxData"]["frameId"] for c in created if c["auxData"].get("name") == UTILITY_WORLD}
+    def contexts():
+        created = [e["params"] for e in events if e["method"] == "Runtime.executionContextCreated"]
+        default = {c["auxData"]["frameId"] for c in created if not c["auxData"].get("name")}
+        utility = {c["auxData"]["frameId"] for c in created if c["auxData"].get("name") == UTILITY_WORLD}
+        return default, utility
+
+    # until every frame has both contexts (a condition, not 1 s: the contexts of a loaded machine come later); if they
+    # never do, the assertions below say which are missing
+    wait_for(page, lambda: len(page.frames) >= 3 and len(contexts()[0]) >= 3 and contexts()[0] <= contexts()[1], 30)
+    default, utility = contexts()
     assert len(default) >= 3, "frames with a default context: %d" % len(default)
     assert default <= utility, "frames without a utility context: %d" % len(default - utility)
     # The contexts above can be those of the frame's first about:blank, which no one ever destroys: what
@@ -414,9 +419,21 @@ def test_content_frame_of_an_iframe_nested_too_deep_is_none(page, cross_site_loo
     document. `contentWindow` is null there, and the client expects no content frame."""
     page.goto(cross_site_loop["deep"], wait_until="load")
     assert wait_for(page, lambda: len(page.frames) >= 10)
-    page.wait_for_timeout(1500)
-    last = page.frames[-1]
-    owner = last.frame_element()
+
+    def last_owner_names_no_frame():
+        try:
+            owner = page.frames[-1].frame_element()
+        except Exception:      # the frame is not there yet (or no longer): look again; the assertion below is not wrapped
+            return False
+        try:
+            return owner.content_frame() is None
+        finally:
+            owner.dispose()
+
+    # until the deepest frame the client lists is the one past the depth (a condition, not 1.5 s): while the chain is
+    # still being announced the last frame is a shallower one, whose element does name a frame
+    wait_for(page, last_owner_names_no_frame, 30)
+    owner = page.frames[-1].frame_element()
     try:
         assert owner.content_frame() is None
     finally:
