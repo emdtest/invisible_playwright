@@ -202,11 +202,15 @@ window.__ready = (async () => {
 #: the runner's sake stays under it, and the hardware WebRender, which keeps the GPU process busy for every frame, does not.
 #: This test starts ONE browser, which the GPU process has to itself, so it is at most what a browser used when four shared the runner.
 #:
-#: LINUX: there is no measurement of the GPU process on the Linux runner yet, and there may be no GPU process at all (software
-#: WebRender on Linux can run in the parent). The test asserts on what exists: if a GPU process exists its CPU is held to the same bound,
-#: and the parent's and the tab's CPU are printed with it. It does not assert that one exists. A first run on Linux says what the numbers
-#: are; the bound for it is to be tightened from them, not guessed.
-GPU_CPU_LIMIT_S = {"windows": 1.5, "linux": 1.5}
+#: LINUX: THERE IS NO GPU PROCESS. Software WebRender composites in the parent, and the engine's tree on Linux is the parent, the
+#: forkserver, the content processes (`tab`), the socket, the RDD and utility processes (WSL, firefox-64, /proc read; e2e Linux run
+#: 43701692047 saw the same). The test says so, and holds the PARENT, where the compositing runs, to a bound measured on the Linux
+#: runner: PARENT_CPU_LIMIT_LINUX_S below.
+GPU_CPU_LIMIT_S = {"windows": 1.5}
+#: CPU seconds the parent may use for the 10 scenes of ONE browser on the ubuntu-latest runner: 3.5 s. Measured there with this test,
+#: 20 runs on two runners (run 43707494271): parent 2.11 to 2.46 s, median 2.31 s; tab 0.41 to 0.54 s; no GPU process in any run.
+#: 3.5 s is 1.4 times the most a run used: a slow runner stays under it, and a parent that composites at half again its cost does not.
+PARENT_CPU_LIMIT_LINUX_S = 3.5
 
 
 def test_the_gpu_process_is_idle_on_a_fixed_scene(firefox_binary, capsys):
@@ -238,9 +242,15 @@ def test_the_gpu_process_is_idle_on_a_fixed_scene(firefox_binary, capsys):
     assert states == ["complete"] * ROUNDS, "the scene did not run %d times to its end: %r" % (ROUNDS, states)
     assert "parent" in seen and "tab" in seen, \
         "no parent and content process of the engine below the test process (seen: %r): the process tree is cut and the CPU is not the browser's" % (seen,)
+    if OS_NAME == "linux":
+        assert "gpu" not in seen, "the Linux engine has a GPU process (seen: %r): software WebRender was measured without one" % (seen,)
+        assert cpu["parent"] < PARENT_CPU_LIMIT_LINUX_S, (
+            "the parent, where software WebRender composites on Linux, used %.2f s of CPU for %d scenes of one browser, the bound is "
+            "%.1f s (all types: %s)" % (cpu["parent"], ROUNDS, PARENT_CPU_LIMIT_LINUX_S,
+                                       json.dumps({k: round(v, 2) for k, v in cpu.items() if v})))
+        return
     limit = GPU_CPU_LIMIT_S[OS_NAME]
-    if OS_NAME == "windows":
-        assert "gpu" in seen, "the Windows engine has no GPU process (seen: %r); the measurement of the bound had one" % (seen,)
+    assert "gpu" in seen, "the Windows engine has no GPU process (seen: %r); the measurement of the bound had one" % (seen,)
     if "gpu" in seen:
         assert cpu["gpu"] < limit, (
             "the GPU process used %.2f s of CPU for %d scenes of one browser on %s, the bound is %.1f s (all types: %s). With the compositing "

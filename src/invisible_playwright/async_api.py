@@ -350,14 +350,10 @@ class InvisiblePlaywright(_session.CommonLaunch):
             if self._pw is not None:
                 await close(self._pw.stop())
                 self._pw = None
-            if self._virtual_display is not None:
-                # Synchronous, so it cannot be cancelled mid-call the way the
-                # three awaits above can.
-                try:
-                    self._virtual_display.stop()
-                except Exception:
-                    pass
-                self._virtual_display = None
+            display = self._take_display()
+            if display is not None:
+                # Off the loop like its start (`_resolve_headless_async`): a cancellation stops the waiting, not the stop.
+                await close(off_the_loop(display.stop))
         finally:
             if self._session_token:
                 # ⛔ NOT ON THE LOOP: `reap` waits for the tree of the session to be gone. It runs in a thread of its own

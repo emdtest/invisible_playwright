@@ -495,6 +495,15 @@ class CommonLaunch:
         self._virtual_display = vd
         return pw_headless
 
+    def _take_display(self) -> Any:
+        """THE release, made once for both APIs: the hidden surface this session started, taken out of it (None when there is none).
+
+        The counterpart of `_plan_headless`: the two teardowns only decide WHERE the stop runs - inline in the sync client, off the
+        loop in the async one. Stopping waits for the Xvfb to exit (`Popen.wait`, a loop of sleeps on POSIX), and on the user's loop
+        that wait held every other browser of the process (e2e Linux, run 43701692047)."""
+        display, self._virtual_display = self._virtual_display, None
+        return display
+
     def _default_context_kwargs(self) -> Dict[str, Any]:
         # The screen and viewport in CSS pixels, derived once in the core:
         # the profile's screen is the PANEL, and until wrapper 0.28.0 the

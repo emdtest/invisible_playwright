@@ -171,6 +171,63 @@ def test_the_type_of_a_process_is_the_last_argument_of_contentproc():
     assert cpu.classify(["firefox.exe", "-contentproc", "weird"]) == "other"
 
 
+class _Proc:
+    """A process as psutil gives it: the name it gave itself, its executable, its command line, its CPU."""
+
+    def __init__(self, pid, name, exe, cmdline, cpu_s=1.0):
+        self.pid, self._name, self._exe, self._cmdline, self._cpu = pid, name, exe, cmdline, cpu_s
+
+    def name(self):
+        return self._name
+
+    def exe(self):
+        return self._exe
+
+    def cmdline(self):
+        return self._cmdline
+
+    def cpu_times(self):
+        import collections
+        return collections.namedtuple("t", "user system")(self._cpu, 0.0)
+
+
+def _below(monkeypatch, children):
+    import psutil
+
+    class _Root:
+        def __init__(self, pid):
+            pass
+
+        def children(self, recursive=False):
+            return children
+
+    monkeypatch.setattr(psutil, "Process", _Root)
+
+
+def test_a_linux_child_that_names_itself_after_its_role_is_still_the_engine(monkeypatch):
+    """The process tree of a Linux engine as /proc shows it (WSL, firefox-64): every child runs the firefox executable and names itself
+    after its role. Counted by name, only the parent was seen and the content processes were lost (e2e Linux, run 43701692047)."""
+    ff = "/opt/engine/firefox-64/firefox"
+    _below(monkeypatch, [
+        _Proc(1, "firefox", ff, [ff, "-profile", "p"]),
+        _Proc(2, "forkserver", ff, [ff, "-contentproc", "forkserver"]),
+        _Proc(3, "Isolated Web Co", ff, [ff, "-contentproc", "-isForBrowser", "tab"]),
+        _Proc(4, "Web Content", ff, [ff, "-contentproc", "tab"]),
+        _Proc(5, "Socket Process", ff, [ff, "-contentproc", "socket"]),
+    ])
+    kinds = sorted(kind for kind, _cpu in cpu.engine_processes(0).values())
+    assert kinds == ["forkserver", "parent", "socket", "tab", "tab"], kinds
+
+
+def test_a_process_that_does_not_run_the_firefox_executable_is_not_the_engine(monkeypatch):
+    _below(monkeypatch, [
+        _Proc(1, "firefox.exe", r"C:\e\firefox.exe", [r"C:\e\firefox.exe", "-contentproc", "gpu"]),
+        _Proc(2, "python3", "/usr/bin/python3", ["/usr/bin/python3", "-c", "x"]),
+        _Proc(3, "Xvfb", "/usr/bin/Xvfb", ["Xvfb", ":99"]),
+    ])
+    assert sorted(kind for kind, _cpu in cpu.engine_processes(0).values()) == ["gpu"]
+
+
 def test_the_cpu_of_a_window_is_the_last_value_minus_the_first_and_a_new_process_counts_whole():
     start = {1: ("parent", 10.0), 2: ("gpu", 1.0)}
     last = {1: ("parent", 12.5), 2: ("gpu", 1.25), 3: ("gpu", 0.5), 4: ("tab", 2.0)}
