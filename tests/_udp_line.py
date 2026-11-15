@@ -88,6 +88,39 @@ def declared_udp(proxy: Dict[str, Any], servers: Sequence[str]) -> str:
     return entry[1]
 
 
+def declared_udp_or_absent(proxy: Dict[str, Any], servers: Sequence[str]) -> Optional[str]:
+    """:func:`declared_udp`, or None when the launch measured nothing for ``proxy`` (a report must say that, not raise)."""
+    try:
+        return declared_udp(proxy, servers)
+    except AssertionError:
+        return None
+
+
+def udp_measure_sentence(declared: Optional[str], rtt_ms: int) -> str:
+    """What the core declared for the proxy of a bench, as a sentence of the verdict of a failed test. A measurement that is
+    not ``coherent`` is said outright: the engine then never sends the page's UDP to the relay, and the test fails for a reason
+    that is the measurement's (the budget of the core against the round trip of the gateway), not the page's."""
+    if declared == "coherent":
+        return "UDP verdict the core declared for this proxy: coherent"
+    if declared is None:
+        return ("the core measured nothing for this proxy: the UDP measure of the core did not finish in its budget "
+                "with rtt %d ms (no verdict was declared)" % rtt_ms)
+    return ("the UDP measure of the core did not finish coherent in its budget with rtt %d ms: it declared %r for this proxy, "
+            "so the engine had no relay to use" % (rtt_ms, declared))
+
+
+def bench_report(gateway: Any, rtt_ms: int, declared: Optional[str]) -> str:
+    """What the bench saw, as one string for the verdict of a failed test: the datagrams the relay carried with their times
+    (seconds from the start of the gateway), the sends that failed, the CONNECTs, the TCP connections accepted, the UDP
+    ASSOCIATEs and their start and end, and what the core declared for the proxy. Nothing here changes an outcome."""
+    log = ["%s:%d atyp=%d t=%.3fs" % (host, port, atyp, at) for host, port, atyp, at in list(gateway.datagram_log)]
+    associations = [[None if x is None else round(x, 3) for x in record] for record in list(gateway.associations)]
+    return ("%s; gateway send errors: %s; CONNECTs the gateway saw: %s; TCP connections it accepted: %d; "
+            "associations (start, end in s from its start): %s; datagram log with times: %s"
+            % (udp_measure_sentence(declared, rtt_ms), list(gateway.send_errors), list(gateway.connects),
+               len(gateway.accepted), associations, log))
+
+
 def visits_for(road: str) -> int:
     """How many times the page is visited on ``road``: three with no proxy, :data:`PROXY_VISITS` behind any proxy."""
     if road == _DIRECT_ROAD:
