@@ -21,8 +21,8 @@ that address, by SOCKS5 address type 1, through the UDP relay. The gateway resol
   loopback address), so the TURN server sees a source that is not the browser's own: if it sees the browser's, the road was
   not the gateway's.
 * :class:`Page` - the page and the verdict, with the shape of a leak test's logic: a tick of 2 seconds after the page starts that
-  marks TIMEOUT, cleared only after a POST made when a server-reflexive candidate arrives; the server compares the address
-  of that candidate with the source the TURN saw.
+  marks TIMEOUT, cleared the moment a server-reflexive candidate arrives (before the POST, so the verdict does not depend on
+  the POST coming back within the tick); the server compares the address of that candidate with the source the TURN saw.
 
 The names and the addresses are RFC 2606 / RFC 5737: nothing in a test can be mistaken for a real host.
 """
@@ -274,7 +274,8 @@ let status = 'PENDING';
 const finish = (s) => { status = s; window.__result.status = s; window.__done = true; };
 document.addEventListener('DOMContentLoaded', () => {
   mark('dom');
-  // the tick of a leak test: 2 seconds after the page starts. It is cleared only after the POST made on a srflx.
+  // the tick of a leak test: 2 seconds after the page starts. It stops the moment a srflx arrives, before the POST: what the
+  // test asks is whether the srflx came before the tick, not whether the POST came back within it.
   const tick = setInterval(() => { if (status === 'PENDING') { mark('tick'); finish('TIMEOUT'); } clearInterval(tick); }, 2000);
   const pc = new RTCPeerConnection({iceServers: [{urls: ['turn:%(turn)s:%(port)d?transport=udp'], username: 'challenge-' + Date.now(), credential: '%(password)s'}]});
   pc.createDataChannel('x');
@@ -284,13 +285,12 @@ document.addEventListener('DOMContentLoaded', () => {
   pc.onicecandidate = async (e) => {
     if (!e.candidate) return;
     window.__result.candidates.push(e.candidate.candidate);
-    if (e.candidate.candidate.indexOf(' typ srflx ') < 0 || status !== 'PENDING') return;
+    if (e.candidate.candidate.indexOf(' typ srflx ') < 0 || status !== 'PENDING' || window.__result.srflx) return;
+    clearInterval(tick);
     mark('srflx');
     window.__result.srflx = e.candidate.candidate;
     const r = await fetch('/verdict', {method: 'POST', body: JSON.stringify({srflx: e.candidate.candidate})});
     mark('posted');
-    if (status !== 'PENDING') return;
-    clearInterval(tick);
     finish((await r.json()).ok ? 'DONE' : 'REFUSED');
   };
   pc.createOffer().then((o) => pc.setLocalDescription(o));

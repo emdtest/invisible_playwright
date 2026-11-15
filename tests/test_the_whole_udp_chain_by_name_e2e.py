@@ -2,8 +2,8 @@
 
 A page asks for a TURN allocation at a server written as a NAME (`turn:turn.relay-only.test:3478`), as the real leak-test pages
 do: no STUN, so a server-reflexive candidate can only be born from a successful allocation. Its logic is the logic of such a page:
-a tick of 2 seconds from the start of the page that marks TIMEOUT, cleared only after a POST made when the srflx arrives; the
-server compares the address of that srflx with the source the TURN server saw for the allocation.
+a tick of 2 seconds from the start of the page that marks TIMEOUT, cleared the moment the srflx arrives (before the POST made for
+it, so the verdict does not depend on the POST coming back within the tick); the server compares the address of that srflx with the source the TURN server saw for the allocation.
 
 The only road to anything is a gateway at 130 ms of round trip (every step of its control connection, every datagram, every
 chunk of a tunnel): the TURN server is at an unroutable documentation address that only the gateway maps to it; the names (the
