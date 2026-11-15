@@ -41,7 +41,26 @@ def bind_tcp_and_probe_udp(address: str, make_tcp: Callable[[str, int], Any], tr
                            draw: Any = None) -> Tuple[Any, int]:
     """``make_tcp(address, port)`` makes the TCP server (it binds, with port 0 for the system's pick; it has ``server_address`` and
     ``server_close``). Returns ``(that server, its port)`` once UDP binds the same number too (the probe is closed again: whoever needs the UDP
-    socket binds it next). Raises RuntimeError saying how many tries were made and the last refusals, codes included."""
+    socket binds it next). Raises RuntimeError saying how many tries were made and the last refusals, codes included.
+
+    ⛔ THE NUMBER IS HELD ON TCP ONLY. Between the return and the bind of whoever needs the UDP socket, another picker of the harness cannot take
+    the number (it binds TCP first, and that is held), but any other bind of that UDP number can: the system's own pick of an ephemeral UDP
+    port for another process, a socket somebody opens on that number. A caller that can take the socket from the picker uses
+    :func:`bind_tcp_and_hold_udp` and has no such window."""
+    tcp, port, probe = _bind_both(address, make_tcp, tries, socket_module, draw)
+    probe.close()
+    return tcp, port
+
+
+def bind_tcp_and_hold_udp(address: str, make_tcp: Callable[[str, int], Any], tries: int = TRIES, socket_module: Any = None,
+                          draw: Any = None) -> Tuple[Any, int, Any]:
+    """:func:`bind_tcp_and_probe_udp` that keeps the UDP socket: ``(tcp server, port, the UDP socket bound to that number)``. The caller owns the
+    UDP socket and closes it (or hands it to the loop that serves it, ``create_datagram_endpoint(sock=...)``): from the first look at the number
+    to the use of it, nobody else can bind it, on TCP or on UDP."""
+    return _bind_both(address, make_tcp, tries, socket_module, draw)
+
+
+def _bind_both(address: str, make_tcp: Callable[[str, int], Any], tries: int, socket_module: Any, draw: Any) -> Tuple[Any, int, Any]:
     sock = socket_module or socket
     refusals: List[str] = []
     last = 0
@@ -53,9 +72,10 @@ def bind_tcp_and_probe_udp(address: str, make_tcp: Callable[[str, int], Any], tr
             probe = sock.socket(sock.AF_INET, sock.SOCK_DGRAM)
             try:
                 probe.bind((address, port))
-            finally:
+            except BaseException:
                 probe.close()
-            return tcp, port
+                raise
+            return tcp, port, probe
         except OSError as exc:
             refusals.append("%s: %s" % (wanted or "system pick", exc))
             if tcp is not None:
