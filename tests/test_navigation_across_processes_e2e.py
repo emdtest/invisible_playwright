@@ -30,8 +30,12 @@ from urllib.parse import urlsplit
 import pytest
 
 from _servers import LocalServer
+from _waits import awatch
 
 pytestmark = pytest.mark.e2e
+
+#: The longest any wait of this file lasts; no healthy run comes near it. It is the only clock the verdicts have.
+DEADLINE = 8.0
 
 FISSION_ON = {
     "fission.autostart": True,
@@ -181,16 +185,19 @@ def test_an_iframe_whose_src_goes_to_another_site_shows_the_new_address(firefox_
         await page.evaluate(
             "(u) => { const f = document.createElement('iframe'); f.id = 'f'; f.src = u; document.body.appendChild(f); }",
             sites["at"]("b.test", "/first"))
-        await page.wait_for_timeout(1500)
+        # until the iframe is at its first address (a condition, not a time: a loaded machine takes longer than 1.5 s)
+        first = await awatch(lambda: [f.url for f in page.frames], lambda urls: any(u.endswith("/first") for u in urls),
+                             DEADLINE, lambda: page.wait_for_timeout(100))
         before = [f.url for f in page.frames]
         await page.evaluate("(u) => { document.getElementById('f').src = u; }", sites["at"]("c.test", "/second"))
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline and not any(f.url.endswith("/second") for f in page.frames):
-            await page.wait_for_timeout(100)
-        return before, [(f.url, f.name) for f in page.frames]
+        second = await awatch(lambda: [f.url for f in page.frames], lambda urls: any(u.endswith("/second") for u in urls),
+                              DEADLINE, lambda: page.wait_for_timeout(100))
+        return before, [(f.url, f.name) for f in page.frames], first.render(), second.render()
 
-    before, after = _run(firefox_binary, scenario)
-    assert before[1].startswith("http://b.test:") and before[1].endswith("/first"), before
-    assert len(after) == 2, after
-    assert after[1][0].startswith("http://c.test:") and after[1][0].endswith("/second"), after
-    assert after[1][1] == "f", after            # still the frame of its <iframe>
+    before, after, seen_first, seen_second = _run(firefox_binary, scenario)
+    seen = "; the frame urls over time: first %s | second %s" % (seen_first, seen_second)
+    assert len(before) == 2 and before[1].startswith("http://b.test:") and before[1].endswith("/first"), (
+        "%r%s" % (before, seen))
+    assert len(after) == 2, "%r%s" % (after, seen)
+    assert after[1][0].startswith("http://c.test:") and after[1][0].endswith("/second"), "%r%s" % (after, seen)
+    assert after[1][1] == "f", "%r%s" % (after, seen)            # still the frame of its <iframe>
