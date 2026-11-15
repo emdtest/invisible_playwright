@@ -63,13 +63,17 @@ class Sites:
                 site = self.server.site
                 length = int(self.headers.get("Content-Length") or 0)
                 self.body = self.rfile.read(length) if length else b""
-                sites.requests.append({"site": site, "path": url.path, "query": self.query,
-                                       "method": self.command, "headers": dict(self.headers)})
+                # `at` is when it arrived and `done` when its answer was written (the clock of the test process):
+                # what a test needs to say how long the network was quiet between two requests
+                entry = {"site": site, "path": url.path, "query": self.query, "method": self.command,
+                         "headers": dict(self.headers), "at": time.monotonic(), "done": None}
+                sites.requests.append(entry)
                 spec = sites._routes.get((site, url.path))
                 if spec is None:
                     self.send_response(404)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                    entry["done"] = time.monotonic()
                     return
                 body = spec["body"](self) if callable(spec["body"]) else spec["body"]
                 if isinstance(body, str):
@@ -87,6 +91,7 @@ class Sites:
                     self.wfile.write(body)
                 except OSError:
                     pass
+                entry["done"] = time.monotonic()
 
             do_GET = _answer
             do_POST = _answer

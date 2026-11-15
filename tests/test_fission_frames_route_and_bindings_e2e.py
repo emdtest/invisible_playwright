@@ -23,10 +23,12 @@ first test proves the frame is not in the process of the page, so the file canno
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
 from _fission_frames import Sites, assert_other_process, launch, new_page, wait_frame
+from _waits import quiet_problem
 
 pytestmark = pytest.mark.e2e
 
@@ -164,10 +166,25 @@ def test_a_route_set_before_the_load_fulfills_what_the_frame_asks_while_loading(
     assert not sites.seen("B", "/api/b"), "the request reached the server through the route"
 
 
+#: `networkidle` promises half a second WITHOUT network. The test below measures the silence on the server's clock and asks
+#: for this much, 100 ms under the promise: the two clocks are one process's, but the client hears about an end a little
+#: after the server writes it.
+QUIET = 0.4
+
+
 def test_networkidle_waits_for_the_late_requests_of_a_frame_of_another_site(page, sites):
     """The frame makes a request 200 ms after it loads, and the next one as soon as that answers (the server holds
     each for 300 ms): there is never half a second without a request, so `networkidle` of the PAGE is not reached
-    before both are done."""
+    before both are done.
+
+    "Never half a second" is made by the page's own timer and promise chain, and a loaded machine can stretch them:
+    when the 200 ms timer fires after 500 ms the page IS idle, and `networkidle` is right to come first. So the test
+    does not assume the late requests came in time; it asks what `networkidle` promises, with the server's clock
+    (each request's arrival and end are stamped in the test process): when `goto` returned, no request of the page
+    was in flight and the network had been quiet for `QUIET`. A product that comes before the late requests of the
+    frame returns while one is in flight, or less than that after the last end, and fails; a slow machine that
+    delays the frame's script returns after a real silence and passes. The message gives the four requests on the
+    server's clock and when `goto` returned."""
     chain = ("<!doctype html><title>late</title><script>window.__done = [];"
              "addEventListener('load', () => setTimeout(() => fetch('/late/1').then(r => r.text())"
              ".then(t => { __done.push(t); return fetch('/late/2'); }).then(r => r.text())"
@@ -178,8 +195,17 @@ def test_networkidle_waits_for_the_late_requests_of_a_frame_of_another_site(page
     sites.route("A", "/late-top", '<!doctype html><title>late top</title>'
                 '<iframe src="%s" width="300" height="100"></iframe>' % sites.url("B", "/late-frame"))
     page.goto(sites.url("A", "/late-top"), wait_until="networkidle", timeout=30000)
-    frame = wait_frame(page, sites.url("B"), "/late-frame")
-    assert frame.evaluate("window.__done") == ["one", "two"]
+    returned = time.monotonic()
+    paths = ("/late-top", "/late-frame", "/late/1", "/late/2")
+    stamps = [(r["path"], r["at"], r["done"]) for r in list(sites.requests) if r["path"] in paths]
+    wait_frame(page, sites.url("B"), "/late-frame")
+    began = min(at for _path, at, _done in stamps)
+    timeline = "; ".join("%s +%.3fs..%s" % (path, at - began, "+%.3fs" % (done - began) if done is not None else "in flight")
+                         for path, at, done in sorted(stamps, key=lambda stamp: stamp[1]))
+    explain = "the requests on the server's clock: %s; goto returned at +%.3fs" % (timeline, returned - began)
+    assert {"/late-top", "/late-frame"} <= {path for path, _at, _done in stamps}, explain
+    problem = quiet_problem(stamps, returned, QUIET)
+    assert problem is None, "%s: %s" % (problem, explain)
     page.wait_for_load_state("networkidle")
 
 
