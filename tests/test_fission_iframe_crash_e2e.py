@@ -94,7 +94,8 @@ def test_the_crash_of_an_iframe_s_process_leaves_the_tab(firefox_binary, engine_
     port = server.server_address[1]
     marionette = None
     try:
-        prefs = dict(FISSION, **{"marionette.port": webfont_probe.MARIONETTE_PORT})
+        marionette_port = webfont_probe.marionette_port()
+        prefs = dict(FISSION, **{"marionette.port": marionette_port})
         with InvisiblePlaywright(binary_path=firefox_binary, headless=True, humanize=False,
                                  extra_args=["-marionette"], extra_prefs=prefs) as browser:
             page = browser.new_context().new_page()
@@ -106,7 +107,7 @@ def test_the_crash_of_an_iframe_s_process_leaves_the_tab(firefox_binary, engine_
             # the iframe's document is not read, nor its address: what the client can see of a frame in another
             # process is what the rest of Fission builds
 
-            marionette = webfont_probe._Marionette(webfont_probe.MARIONETTE_PORT)
+            marionette = webfont_probe._Marionette(marionette_port)
             marionette.call("WebDriver:NewSession", {"capabilities": {"alwaysMatch": {}}})
             marionette.call("Marionette:SetContext", {"value": "chrome"})
             pids = json.loads(marionette.call("WebDriver:ExecuteScript", {"script": PIDS, "args": []})["value"])
