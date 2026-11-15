@@ -53,11 +53,15 @@ _CLIENT = textwrap.dedent("""
             self.over = threading.Event()
             self.on_the_loop = []
             self._real = {}
+            #: Set to make the sentinel's next wait that long: the loop then waits in its selector, late by that much, as on a loaded
+            #: machine that does not schedule it.
+            self.pause_once = 0
 
         async def sentinel(self):
             last = time.monotonic()
             while not self.stop.is_set():
-                await asyncio.sleep(0.005)
+                await asyncio.sleep(self.pause_once or 0.005)
+                self.pause_once = 0
                 now = time.monotonic()
                 self.gaps.append(now - last)
                 last = self.beat[0] = now
@@ -83,13 +87,24 @@ _CLIENT = textwrap.dedent("""
                            for i, f in frames.items() if i != main_id and i != threading.get_ident()}}
 
         def watcher(self):
-            looked = 0
+            # Only the part of a lateness during which the loop's thread was RUNNING counts. A loop the machine did not schedule waits in
+            # the selector and then, once woken, runs the callbacks that queued meanwhile (the pingers' replies): counting the whole
+            # lateness at that moment charged the machine's 90 ms to whoever ran first (candidate 43727128285, Windows: 94 ms, the main
+            # thread in `self._selector.select`, no blocking call on it). `busy_since` is when the thread last left the selector.
+            looked, busy_since = 0, None
             while not self.over.is_set():
                 time.sleep(0.003)
-                late = time.monotonic() - self.beat[0]
+                now = time.monotonic()
+                late = now - self.beat[0]
                 level = int(late / 0.03)
-                if late > 0.03 and not self.idle(sys._current_frames().get(main_id)):
-                    self.held = max(self.held, late)
+                if self.idle(sys._current_frames().get(main_id)):
+                    busy_since = None
+                else:
+                    if busy_since is None:
+                        busy_since = now
+                    held = now - max(self.beat[0], busy_since)
+                    if held > 0.03:
+                        self.held = max(self.held, held)
                 if level > looked:
                     self.holes.append({"late_ms": round(late * 1000), **self.stacks()})
                 looked = level
@@ -155,6 +170,23 @@ _CLIENT = textwrap.dedent("""
         await asyncio.sleep(0.05)
         await control.finish()
 
+        # The second control: a loop that is LATE without being held. The sentinel's next wake is 150 ms away, so the loop waits in its
+        # selector (as when the machine does not schedule it), and 130 ms in it runs 15 ms of a callback that was due then, while the
+        # sentinel is still 125 ms late. Only those 15 ms are the loop's thread at work: the lateness before them must not count.
+        unscheduled = Instrument()
+        await unscheduled.start()
+        await asyncio.sleep(0.05)
+        unscheduled.pause_once = 0.15
+        loop = asyncio.get_running_loop()
+
+        def burst():
+            end = time.monotonic() + 0.015
+            while time.monotonic() < end:
+                pass
+        loop.call_later(0.13, burst)
+        await asyncio.sleep(0.4)
+        await unscheduled.finish()
+
         # A slow disk: removing a profile takes 150 ms more (a scanner of files at work, a spinning disk, a loaded runner). On a fast
         # disk the removal of a profile is a few ms and a close made on the loop hides in the noise; with a disk that is slow the
         # wait is what the loop pays, wherever it is made. Every thread pays it the same.
@@ -195,6 +227,7 @@ _CLIENT = textwrap.dedent("""
         report.update({
             "took": took, "launched": launched,
             "control": control.report(),
+            "unscheduled": unscheduled.report(),
             "answers": [r["answers"] for r in records], "slowest": [r["slowest"] for r in records],
         })
         # The other three still work after it.
@@ -254,6 +287,16 @@ def test_the_instrument_sees_a_loop_that_is_held(report):
     assert control["held"] > 0.3, (
         "the watcher did not see a loop held for 400 ms: held %.0f ms" % (control["held"] * 1000))
     assert "sleep" in control["on_the_loop"]
+
+
+@pytest.mark.wall_clock
+def test_the_instrument_does_not_charge_a_loop_the_machine_did_not_schedule(report):
+    """The second control: a loop that waited 130 ms in its selector and then ran a 15 ms callback was not held by anybody.
+    Charging it the whole lateness made a loaded Windows runner fail the bound below with 94 ms and nothing on the loop's thread
+    (candidate 43727128285)."""
+    unscheduled = report["unscheduled"]
+    assert unscheduled["gap"] > 0.12, "the sentinel was not late: %r" % unscheduled
+    assert unscheduled["held"] < 0.03, "a loop late by the machine, not by a call, was charged %.0f ms" % (unscheduled["held"] * 1000)
 
 
 @pytest.mark.wall_clock
