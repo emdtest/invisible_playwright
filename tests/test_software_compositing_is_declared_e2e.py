@@ -108,7 +108,7 @@ def test_the_compositor_is_webrender_software_whatever_the_machine(firefox_binar
     from invisible_playwright import InvisiblePlaywright
 
     monkeypatch.setenv("MOZ_REMOTE_ALLOW_SYSTEM_ACCESS", "1")   # the chrome-scope reads below
-    port = webfont_probe.MARIONETTE_PORT
+    port = webfont_probe.marionette_port()
     pref_names = ["zoom.stealth.gfx.feature_status", "gfx.webrender.software", "gfx.webrender.software.d3d11"]
     server, url = _a_page_server("<!doctype html><title>compositor</title><body>x</body>")
     marionette = None
