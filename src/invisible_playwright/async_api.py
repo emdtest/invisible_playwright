@@ -15,6 +15,7 @@ from invisible_core._fpforge import Profile, generate_profile
 from invisible_core import SessionLocale, persona_cookies, prepare_session_geo, record_session_seed, resolve_session_seed
 from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
+from invisible_core._offloop import off_the_loop
 from ._reaper import SessionToken, guard_for
 
 
@@ -359,8 +360,12 @@ class InvisiblePlaywright(_session.CommonLaunch):
                 self._virtual_display = None
         finally:
             if self._session_token:
+                # ⛔ NOT ON THE LOOP: `reap` waits for the tree of the session to be gone. It runs in a thread of its own
+                # (`off_the_loop`); a cancellation of this task stops the waiting and not the reaping, which runs to its end.
                 try:
-                    self._lifetime_guard.reap(self._session_token)
+                    await off_the_loop(self._lifetime_guard.reap, self._session_token)
+                except asyncio.CancelledError as stop:
+                    cancelled = stop
                 except Exception:
                     pass
                 self._session_token = SessionToken()
