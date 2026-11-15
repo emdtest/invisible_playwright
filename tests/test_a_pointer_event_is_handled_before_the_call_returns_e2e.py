@@ -82,7 +82,7 @@ def test_a_click_that_opens_a_dialog_still_answers(firefox_binary):
         page.set_content('<button id="b" style="width:300px;height:200px" '
                          'onclick="alert(1); window.after = true">b</button>')
         opened = []
-        page.on("dialog", opened.append)
+        page.on("dialog", lambda dialog: opened.append(dialog))     # a plain function: the client tags its handlers
         # raises (the engine's "did not handle ... within 5 s") if the call waited for the handler
         page.mouse.click(150, 100)
         # the dialog event comes before the reply of the call; the pump only lets a late one be read
