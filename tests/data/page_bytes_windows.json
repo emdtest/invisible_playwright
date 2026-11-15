@@ -1,6 +1,6 @@
 {
  "os": "windows",
- "source": "GitHub Actions run 43652292533 (workflow 'cpu render path hunt vm', job on windows-2022), arm `ours` = the published engine firefox-64_159.0_20261114003728 with the core the branch installed from the index (before the declaration of software compositing), seed 42, locale en-US, timezone Europe/Rome, headless=True; launched twice, and the arm `ours_vmretail` (the VM decisions of the new core) twice more: every key below is equal in the four launches. `pngs`: the PNG keys, whose bytes differ in a 16-byte chunk `deBG` in every launch; their length, and the pixels they decode to where the hunt kept the bytes (a data URL longer than 3000 characters was kept as hash and length only: those five entries have no `sha256` and are written by the first run of tests/test_the_bytes_a_page_reads_do_not_change_e2e.py on the engine of the reference). The keys of c2d.scale.* and c2d.gradtext.* were added to the probe after that run and are in no reference yet.",
+ "source": "GitHub Actions run 43652292533 (workflow 'cpu render path hunt vm', job on windows-2022), arm `ours` = the published engine firefox-64_159.0_20261114003728 with the core the branch installed from the index (before the declaration of software compositing), seed 42, locale en-US, timezone Europe/Rome, headless=True; launched twice, and the arm `ours_vmretail` (the VM decisions of the new core) twice more: every key below is equal in the four launches. `pngs`: the PNG keys, whose bytes differ in a 16-byte chunk `deBG` in every launch; their length, and the pixels they decode to where the hunt kept the bytes (a data URL longer than 3000 characters was kept as hash and length only: those five entries have no `sha256` and are written by the first run of tests/test_the_bytes_a_page_reads_do_not_change_e2e.py on the engine of the reference). The keys of c2d.scale.*, c2d.gradtext.*, gpu.webgpu.features and gpu.webgpu.limits were added to the probe after that run (in it the WebGPU read threw `Xray wrapping of iterators not supported`, key gpu.webgpu.error, dropped here) and are in no reference yet.",
  "keys": {
   "c2d.composite.getImageData": {
    "h": "df65ebe03bf31",
@@ -258,9 +258,6 @@
   },
   "gl2.unmasked": {
    "s": "[\"Google Inc. (Intel)\",\"ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar\"]"
-  },
-  "gpu.webgpu.error": {
-   "s": "Xray wrapping of iterators not supported."
   },
   "gpu.webgpu.info": {
    "s": "{\"vendor\":\"\",\"architecture\":\"\",\"device\":\"\",\"description\":\"\"}"

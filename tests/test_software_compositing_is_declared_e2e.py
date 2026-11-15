@@ -8,9 +8,10 @@ blocklisted with FEATURE_FAILURE_VM_VENDOR, and on Windows the core sets `gfx.we
 1. the compositor the engine runs is WebRender (Software), on Windows AND on Linux (on Linux this closes the risk that the table,
    with no pref beside it, sends the engine down another road);
 2. the GPU process, which is where a hardware WebRender spends its CPU, spends almost none on a fixed scene;
-3. no byte a page reads of canvas 2D, WebGL, WebGPU, text and the declared values changes: the 86 keys of the probe plus the canvas 2D
-   scenes added for the canvas blocklist (drawImage scaled up and down with imageSmoothing off and on at three qualities, text filled
-   and stroked with gradients of three kinds) equal the reference of the operating system, tests/data/page_bytes_<os>.json.
+3. no byte a page reads of canvas 2D, WebGL, WebGPU, text and the declared values changes: the keys of the probe (the 86 of the first
+   hunt, WebGPU features and limits read by name, and the canvas 2D scenes added for the canvas blocklist: drawImage scaled up and down
+   with imageSmoothing off and on at three qualities, text filled and stroked with gradients of three kinds) equal the reference of the
+   operating system, tests/data/page_bytes_<os>.json.
 
 Known-bad input: the engine with the core of firefox-64 before this declaration (64.71.0). On the Windows runner `gfx.webrender.software`
 is false there (the effective prefs of run 43652292533, arm ours) and the GPU process uses 2.7 to 4.2 s on the scene of test 2 (GitHub

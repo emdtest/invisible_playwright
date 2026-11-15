@@ -423,9 +423,27 @@
     const a = await Promise.race([navigator.gpu.requestAdapter(), sleep(10000).then(() => "timeout")]);
     if (!a || a === "timeout") { put("gpu.webgpu", String(a)); return; }
     const info = a.info || (a.requestAdapterInfo ? await a.requestAdapterInfo() : {});
-    const lim = {}; for (const k in a.limits) lim[k] = a.limits[k];
+    // Features and limits are read by NAME, never by iterating them: the expression runs with the page's objects behind Xray wrappers, and
+    // `Array.from(a.features)` / `for (k in a.limits)` threw "Xray wrapping of iterators not supported" there (run 43652292533). `has` and a property
+    // read are plain calls. The names are those of the WebGPU specification (limits table and GPUFeatureName); one the engine does not know reads
+    // false / undefined, which is a value like any other.
+    const featureNames = ["depth-clip-control", "depth32float-stencil8", "texture-compression-bc", "texture-compression-bc-sliced-3d",
+      "texture-compression-etc2", "texture-compression-astc", "texture-compression-astc-sliced-3d", "timestamp-query", "indirect-first-instance",
+      "shader-f16", "rg11b10ufloat-renderable", "bgra8unorm-storage", "float32-filterable", "float32-blendable", "clip-distances",
+      "dual-source-blending", "subgroups"];
+    const limitNames = ["maxTextureDimension1D", "maxTextureDimension2D", "maxTextureDimension3D", "maxTextureArrayLayers", "maxBindGroups",
+      "maxBindGroupsPlusVertexBuffers", "maxBindingsPerBindGroup", "maxDynamicUniformBuffersPerPipelineLayout",
+      "maxDynamicStorageBuffersPerPipelineLayout", "maxSampledTexturesPerShaderStage", "maxSamplersPerShaderStage",
+      "maxStorageBuffersPerShaderStage", "maxStorageTexturesPerShaderStage", "maxUniformBuffersPerShaderStage", "maxUniformBufferBindingSize",
+      "maxStorageBufferBindingSize", "minUniformBufferOffsetAlignment", "minStorageBufferOffsetAlignment", "maxVertexBuffers", "maxBufferSize",
+      "maxVertexAttributes", "maxVertexBufferArrayStride", "maxInterStageShaderVariables", "maxColorAttachments",
+      "maxColorAttachmentBytesPerSample", "maxComputeWorkgroupStorageSize", "maxComputeInvocationsPerWorkgroup", "maxComputeWorkgroupSizeX",
+      "maxComputeWorkgroupSizeY", "maxComputeWorkgroupSizeZ", "maxComputeWorkgroupsPerDimension"];
+    const lim = {}, feat = {};
+    for (const k of limitNames) { try { lim[k] = a.limits[k]; } catch (e) { lim[k] = "ERR " + e.message; } }
+    for (const f of featureNames) { try { feat[f] = a.features.has(f); } catch (e) { feat[f] = "ERR " + e.message; } }
     put("gpu.webgpu.info", { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description });
-    put("gpu.webgpu.features", Array.from(a.features).sort());
+    put("gpu.webgpu.features", feat);
     put("gpu.webgpu.limits", lim);
   });
 
