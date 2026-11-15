@@ -129,7 +129,7 @@ class InvisiblePlaywright(_session.CommonLaunch):
             # the REAL result of _resolve_headless (did it create an
             # alternate desktop or not?) must be known BEFORE composing the
             # prefs, not after: B172, 2026-08-24.
-            pw_headless = self._resolve_headless()
+            pw_headless = await self._resolve_headless_async()
             prefs = self._build_prefs()
             playwright_proxy = _configure_proxy_shared(self._proxy, prefs)
             self._session_token = SessionToken.mint()
