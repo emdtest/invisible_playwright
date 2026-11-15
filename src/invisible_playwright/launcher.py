@@ -569,12 +569,12 @@ class InvisiblePlaywright(_session.CommonLaunch):
             except Exception:
                 pass
             self._pw = None
-        if self._virtual_display is not None:
+        display = self._take_display()
+        if display is not None:
             try:
-                self._virtual_display.stop()
+                display.stop()
             except Exception:
                 pass
-            self._virtual_display = None
         # Last, and unconditionally: whatever Playwright's close() did or did
         # not manage, nothing carrying this session's token may outlive it. Each
         # step above is individually wrapped in `except: pass`, so before this

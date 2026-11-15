@@ -37,8 +37,25 @@ def delta_by_type(start: Dict[int, Tuple[str, float]], last: Dict[int, Tuple[str
     return out
 
 
+def is_engine(proc) -> bool:
+    """True when the process runs the firefox executable (its file name, whatever name the process gave itself)."""
+    import psutil
+
+    try:
+        exe = proc.exe()
+    except (psutil.Error, OSError):
+        exe = ""
+    # Either separator: the file name of the executable, whichever system wrote the path.
+    return (exe or proc.name()).replace("\\", "/").rsplit("/", 1)[-1].lower().startswith("firefox")
+
+
 def engine_processes(root_pid: int) -> Dict[int, Tuple[str, float]]:
-    """pid -> (type, cumulative CPU seconds) of every process named firefox below `root_pid`, now."""
+    """pid -> (type, cumulative CPU seconds) of every process of the engine below `root_pid`, now.
+
+    ⛔ AN ENGINE PROCESS IS KNOWN BY ITS EXECUTABLE, NOT BY ITS NAME. On Linux a child names itself after its role ("Web Content",
+    "Isolated Web Co", "forkserver", "Socket Process", read from /proc/<pid>/comm) while its executable stays the firefox binary, so a
+    filter on the name kept the parent alone and the content processes were never counted (e2e Linux, run 43701692047). On Windows the
+    name and the executable are the same file."""
     import psutil
 
     out: Dict[int, Tuple[str, float]] = {}
@@ -48,7 +65,7 @@ def engine_processes(root_pid: int) -> Dict[int, Tuple[str, float]]:
         return out
     for proc in below:
         try:
-            if not proc.name().lower().startswith("firefox"):
+            if not is_engine(proc):
                 continue
             times = proc.cpu_times()
             out[proc.pid] = (classify(proc.cmdline()), times.user + times.system)
