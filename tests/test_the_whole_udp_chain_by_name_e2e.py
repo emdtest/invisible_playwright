@@ -23,7 +23,8 @@ What the product must do, to be what a retail Firefox is with no proxy at all (t
     credentials all the same, BEFORE the test lets them go: a handshake that waits for another leaves the road waiting for the test,
     on any machine, and a quick or a slow one makes no difference; (2) from the birth of the PeerConnection to that Allocate the
     gateway, the DoH and the TURN server recorded at most one SOCKS5 control connection with its CONNECT to the DoH (greeting and
-    CONNECT, RFC 1928), one DoH question (the A record, RFC 8484), and the two transactions of an Allocate (the first answered 401, the
+    CONNECT, RFC 1928; the one that carried the question of the TURN name, told by the number of the connection the gateway gave
+    the DoH: the page's own server and the DoH connections of other names, made in parallel, are shown and decide nothing), one DoH question (the A record, RFC 8484), and the two transactions of an Allocate (the first answered 401, the
     second with the long-term credential, RFC 8656 and RFC 8489): five exchanges, and one more is red; (3) the Allocate leaves on an
     association that was ready before the birth. The page is waited for until its srflx is posted (30 s), not until its tick.
 
@@ -151,7 +152,7 @@ def _walk(gateway, firefox_binary, engine_at_least, prefs):
         associations = [list(a) for a in gateway.associations]
         via = list(gateway.datagram_via)
         requests = list(gateway.requests)
-        doh_questions = [(q.name, q.qtype) for q in gateway.doh.queries if q.name == chain_mod.TURN_NAME]
+        doh_questions = [q for q in gateway.doh.question_connections if q[0] == chain_mod.TURN_NAME]
         allocates = [(t - t0, tid, mtype, credentials) for t, tid, mtype, credentials in gateway.turn.transactions()]
         allocated_at = gateway.turn.allocations[0][3] - t0 if gateway.turn.allocations else None
         held_starts = [a[0] for a in associations if a[0] >= held_from]

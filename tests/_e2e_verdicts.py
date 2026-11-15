@@ -59,10 +59,24 @@ DOH_QUESTIONS = 1
 #: request carries no credentials and is answered 401 with a REALM and a NONCE, the second carries them and is answered with the
 #: relayed address. A retransmission of one is the same transaction (same transaction id), so it is not counted twice.
 ALLOCATE_TRANSACTIONS = 2
-#: The control connections of the road after the birth that are not an ASSOCIATE: ONE, the CONNECT to the DoH that carries the
-#: question, and none when the connection that loaded the page is still open and carries it. A connection for every question, or a
-#: second one, is a handshake nobody needs.
+#: The control connection of the road after the birth that carries the question of the TURN name: ONE, the CONNECT to the DoH, and none
+#: when the connection that loaded the page is still open and carries it. A connection made again for a question that comes after
+#: the first one, or a second one for the same name, is a handshake nobody needs. Other connections of the browser (the page's own
+#: server, the DoH connections it opens in parallel for its own names) are not on this road: they are shown, they decide nothing.
 CONNECTS_AFTER_THE_BIRTH = 1
+
+
+def turn_road_connections(born: float, allocated_at: float, requests: Iterable[Tuple[float, int, str, str]],
+                          doh_questions: Sequence[Tuple[str, int, Optional[int]]]) -> Tuple[List[Tuple[float, int, str, str]],
+                                                                                           List[Tuple[float, int, str, str]]]:
+    """The CONNECTs of ``requests`` after the birth, split in (the ones that carried a question of the TURN name, the others).
+
+    ``doh_questions`` are the (name, type, connection) of ``FakeDoh.question_connections`` for the TURN name: ``connection`` is the
+    index of the control connection of the gateway that carried the CONNECT to the DoH, the same number as the second field of
+    ``Gateway.requests``. The match is by that number, exact: a connection that carried no question of the name is not on the road."""
+    carried = {q[2] for q in doh_questions if q[2] is not None}
+    after = [r for r in requests if r[2] == "connect" and born <= r[0] <= allocated_at]
+    return [r for r in after if r[1] in carried], [r for r in after if r[1] not in carried]
 
 
 def turn_exchanges_most(auth: bool = False) -> int:
@@ -72,50 +86,56 @@ def turn_exchanges_most(auth: bool = False) -> int:
 
 
 def turn_exchanges(born: float, allocated_at: float, requests: Iterable[Tuple[float, int, str, str]],
-                   doh_questions: Sequence[Tuple[str, int]], allocates: Sequence[Tuple[float, bytes, int, bool]],
+                   doh_questions: Sequence[Tuple[str, int, Optional[int]]], allocates: Sequence[Tuple[float, bytes, int, bool]],
                    auth: bool = False) -> Tuple[int, List[str]]:
     """The exchanges of the road from the birth to the Allocate answered with credentials, as (their number, what is more than the
-    protocols ask for, in words). Every control connection that carried a CONNECT (or any command but ASSOCIATE) costs its greeting
-    and its command (and the authentication); every DoH question one; every distinct Allocate transaction one."""
-    commands = [r for r in requests if r[2] in ("connect", "other") and born <= r[0] <= allocated_at]
+    protocols ask for, in words). The control connection that carried the question of the TURN name costs its greeting and its
+    CONNECT (and the authentication); every question costs one; every distinct Allocate transaction one."""
+    road, _others = turn_road_connections(born, allocated_at, requests, doh_questions)
     transactions = [t for t in allocates if t[0] <= allocated_at]
     per_connection = SOCKS_EXCHANGES + (SOCKS_AUTH_EXCHANGES if auth else 0)
     found = []
-    if len(commands) > CONNECTS_AFTER_THE_BIRTH:
-        found.append("%d SOCKS5 control connections with a command other than ASSOCIATE after the birth (%s), the design needs %d at most"
-                     % (len(commands), [r[3] for r in commands], CONNECTS_AFTER_THE_BIRTH))
+    if len(road) > CONNECTS_AFTER_THE_BIRTH:
+        found.append("%d SOCKS5 control connections made after the birth carried a question of the TURN name (%s), the design needs "
+                     "%d at most" % (len(road), [r[3] for r in road], CONNECTS_AFTER_THE_BIRTH))
     if len(doh_questions) > DOH_QUESTIONS:
         found.append("%d DoH questions for the name (%s), a resolver told its family asks %d"
-                     % (len(doh_questions), list(doh_questions), DOH_QUESTIONS))
+                     % (len(doh_questions), [(q[0], q[1]) for q in doh_questions], DOH_QUESTIONS))
     if len(transactions) > ALLOCATE_TRANSACTIONS:
         found.append("%d Allocate transactions (%s), the long-term credential asks %d: the one without credentials, answered 401, and "
                      "the one with them" % (len(transactions), [("credentials" if t[3] else "no credentials") for t in transactions],
                                             ALLOCATE_TRANSACTIONS))
-    return len(commands) * per_connection + len(doh_questions) + len(transactions), found
+    return len(road) * per_connection + len(doh_questions) + len(transactions), found
 
 
 def turn_exchanges_problem(born: float, allocated_at: float, requests: Iterable[Tuple[float, int, str, str]],
-                           doh_questions: Sequence[Tuple[str, int]],
+                           doh_questions: Sequence[Tuple[str, int, Optional[int]]],
                            allocates: Sequence[Tuple[float, bytes, int, bool]], auth: bool = False) -> Optional[str]:
     """What is wrong with the NUMBER of exchanges of the road, from the birth of the PeerConnection (``born``) to the Allocate answered
     with credentials (``allocated_at``), or None. The times are seconds on the gateway's clock and only ORDER the records: nothing
     here compares one with a duration, so a machine whose every stamp is later gives the same count.
 
-    ``requests`` is ``Gateway.requests``; ``doh_questions`` the (name, type) of every question the DoH heard for the TURN name (nothing
-    else asks it, so the question is the PeerConnection's); ``allocates`` the transactions of ``TurnServer.transactions()``.
+    ``requests`` is ``Gateway.requests``; ``doh_questions`` the (name, type, connection) of every question the DoH heard for the TURN
+    name (nothing else asks it, so the question is the PeerConnection's); ``allocates`` the transactions of
+    ``TurnServer.transactions()``.
 
-    The most the road may cost: one SOCKS5 control connection with its CONNECT to the DoH (``SOCKS_EXCHANGES``, one more with a user
-    and a password), the one DoH question, the two transactions of the Allocate. An ASSOCIATE is no exchange of this road: the
-    association that carries the Allocate is made before the birth (``cold_association_problem`` judges it, and the held handshakes
-    of ``held_handshake_problem`` prove that nothing waits for one made after)."""
+    The most the road may cost: the one SOCKS5 control connection that carried the question, with its CONNECT to the DoH
+    (``SOCKS_EXCHANGES``, one more with a user and a password), the one DoH question, the two transactions of the Allocate. What the
+    browser does on other connections (its page, the DoH for other names, in parallel) is not on the road: it is listed in the message
+    as evidence and decides nothing. An ASSOCIATE is no exchange of this road either: the association that carries the Allocate is
+    made before the birth (``cold_association_problem`` judges it, and the held handshakes of ``held_handshake_problem`` prove that
+    nothing waits for one made after)."""
+    requests = list(requests)
     seen, found = turn_exchanges(born, allocated_at, requests, doh_questions, allocates, auth)
     most = turn_exchanges_most(auth)
     if not found and seen <= most:
         return None
+    _road, others = turn_road_connections(born, allocated_at, requests, doh_questions)
     return ("the road made %d exchanges from the birth to the Allocate answered with credentials, the protocols ask for %d at most "
-            "(%d per SOCKS5 control connection x %d, %d DoH question, %d Allocate transactions): %s"
+            "(%d per SOCKS5 control connection that carried the question x %d, %d DoH question, %d Allocate transactions): %s; other "
+            "CONNECTs after the birth, not counted: %s"
             % (seen, most, SOCKS_EXCHANGES + (SOCKS_AUTH_EXCHANGES if auth else 0), CONNECTS_AFTER_THE_BIRTH, DOH_QUESTIONS,
-               ALLOCATE_TRANSACTIONS, "; ".join(found) or "more than that in all"))
+               ALLOCATE_TRANSACTIONS, "; ".join(found) or "more than that in all", [r[3] for r in others] or "none"))
 
 
 def held_handshake_problem(allocated_at: Optional[float], released_at: float, held: Sequence[float]) -> Optional[str]:
@@ -141,7 +161,7 @@ def held_handshake_problem(allocated_at: Optional[float], released_at: float, he
 
 
 def turn_chain_problem(born: float, allocated_at: Optional[float], released_at: float, held: Sequence[float],
-                       requests: Iterable[Tuple[float, int, str, str]], doh_questions: Sequence[Tuple[str, int]],
+                       requests: Iterable[Tuple[float, int, str, str]], doh_questions: Sequence[Tuple[str, int, Optional[int]]],
                        allocates: Sequence[Tuple[float, bytes, int, bool]],
                        associations: Sequence[Sequence[Optional[float]]], via: Iterable[Tuple[str, int, int, float]], host: str,
                        auth: bool = False) -> Optional[str]:

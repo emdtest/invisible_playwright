@@ -277,7 +277,7 @@ def test_a_frame_that_is_painted_late_is_waited_for_and_one_never_painted_is_red
 # ---------------------------------------------------------------------------
 
 from _e2e_verdicts import (held_handshake_problem, turn_chain_problem, turn_exchanges, turn_exchanges_most,  # noqa: E402
-                           turn_exchanges_problem)
+                           turn_exchanges_problem, turn_road_connections)
 
 TURN_BORN = 10.0
 HOST = "198.51.100.7"
@@ -286,7 +286,7 @@ TURN_ASSOCIATIONS = [[0.1, 0.3], [9.0, 9.26], [9.1, 9.36], [10.1, None]]
 #: what the gateway read: the pool's two ASSOCIATEs before the birth, then the CONNECT to the DoH that carries the question
 REQUESTS = [(9.0, 1, "associate", "association #1"), (9.1, 2, "associate", "association #2"),
             (10.02, 3, "connect", "192.0.2.53:443"), (10.1, 4, "associate", "association #3")]
-QUESTIONS = [("turn.relay-only.test", 1)]
+QUESTIONS = [("turn.relay-only.test", 1, 3)]       # asked on the control connection #3, the CONNECT to the DoH
 #: the Allocate without credentials (answered 401), then the one with them: two transactions
 ALLOCATES = [(10.5, b"\x01" * 12, 3, False), (10.8, b"\x02" * 12, 3, True)]
 VIA = [(HOST, 3478, 1, 10.5), (HOST, 3478, 1, 10.8)]
@@ -343,12 +343,15 @@ def test_the_held_verdict_is_an_order_of_two_stamps_not_a_distance_between_them(
 
 def test_one_exchange_more_than_the_protocols_ask_for_is_red_and_at_the_most_is_not():
     # a second question for the name (an AAAA nobody needs)
-    problem = _road(questions=QUESTIONS + [("turn.relay-only.test", 28)])
+    problem = _road(questions=QUESTIONS + [("turn.relay-only.test", 28, 3)])
     assert problem and "6 exchanges" in problem and "5 at most" in problem and "2 DoH questions" in problem
-    # a second CONNECT: the DoH connection made again for the question
+    # a second CONNECT on the road: the question asked again on a connection made anew after the first (control connection #5)
     again = REQUESTS + [(10.05, 5, "connect", "192.0.2.53:443")]
-    problem = _road(requests=again)
-    assert problem and "7 exchanges" in problem and "2 SOCKS5 control connections" in problem
+    problem = _road(requests=again, questions=QUESTIONS + [("turn.relay-only.test", 1, 5)])
+    assert problem and "8 exchanges" in problem and "2 SOCKS5 control connections made after the birth carried" in problem
+    # the same question asked again on the same connection is an exchange more, not a connection more
+    problem = _road(questions=QUESTIONS * 2)
+    assert problem and "6 exchanges" in problem and "2 DoH questions" in problem and "SOCKS5 control connections" not in problem
     # a third Allocate transaction (a transaction id that is not a retransmission)
     problem = _road(allocates=ALLOCATES + [(10.7, b"\x03" * 12, 3, True)])
     assert problem and "6 exchanges" in problem and "3 Allocate transactions" in problem
@@ -361,6 +364,16 @@ def test_the_exchanges_are_the_ones_between_the_birth_and_the_allocation_and_an_
     # before the birth: the DoH connection of the page; after the allocation: the POST of the page
     around = [(9.5, 0, "connect", "192.0.2.53:443"), (11.9, 9, "connect", "127.0.0.1:8000")] + REQUESTS
     assert turn_exchanges_problem(TURN_BORN, 10.8, around, QUESTIONS, ALLOCATES) is None
+    # and what the browser does on other connections inside that window (the DoH for names of its own, opened in parallel, and the
+    # server of the page) is not the road: four of them, and the verdict is the same
+    parallel = REQUESTS + [(10.03, 6, "connect", "192.0.2.53:443"), (10.04, 7, "connect", "192.0.2.53:443"),
+                           (10.05, 8, "connect", "192.0.2.53:443"), (10.2, 9, "connect", "127.0.0.1:43167")]
+    assert turn_exchanges_problem(TURN_BORN, 10.8, parallel, QUESTIONS, ALLOCATES) is None
+    assert turn_exchanges(TURN_BORN, 10.8, parallel, QUESTIONS, ALLOCATES) == (turn_exchanges_most(), [])
+    assert _road(requests=parallel) is None
+    # when the road is red they are listed in the message as evidence, and are not what made it red
+    problem = _road(requests=parallel, questions=QUESTIONS * 2)
+    assert problem and "6 exchanges" in problem and "127.0.0.1:43167" in problem and "not counted" in problem
     # a later Allocate is not on the road, and another type of transaction (a Refresh) is not an Allocate
     late = ALLOCATES + [(12.0, b"\x04" * 12, 3, True), (10.7, b"\x05" * 12, 4, True)]
     assert turn_exchanges_problem(TURN_BORN, 10.8, REQUESTS, QUESTIONS, [a for a in late if a[2] == 3]) is None
@@ -421,14 +434,39 @@ def test_a_client_that_walks_the_road_by_the_protocols_spends_exactly_the_exchan
         u.close()
         t.close()
         allocated_at = chain.turn.allocations[0][3] - chain.t0
-        questions = [(q.name, q.qtype) for q in chain.doh.queries if q.name == chain_mod.TURN_NAME]
+        questions = [q for q in chain.doh.question_connections if q[0] == chain_mod.TURN_NAME]
         allocates = [(a[0] - chain.t0,) + tuple(a[1:]) for a in chain.turn.transactions()]
-        assert questions == [(chain_mod.TURN_NAME, QTYPE_A)] and len(chain.turn.seen) == 4 and len(allocates) == 2
+        assert [q[:2] for q in questions] == [(chain_mod.TURN_NAME, QTYPE_A)] and len(chain.turn.seen) == 4 and len(allocates) == 2
         requests = list(chain.requests)
         assert [r[2] for r in requests] == ["greeting", "associate", "greeting", "connect"]
         assert requests[3][3].startswith("192.0.2.53:")
+        assert questions[0][2] == requests[3][1]            # the DoH names the connection that carried the question: the gateway's own number
+        assert turn_exchanges(born, allocated_at, requests + [(allocated_at - 0.001, 77, "connect", "127.0.0.1:1")], questions,
+                              allocates) == (turn_exchanges_most(), [])       # a stranger's CONNECT in the window is not on the road
         assert turn_exchanges(born, allocated_at, requests, questions, allocates) == (turn_exchanges_most(), [])
         assert turn_exchanges_problem(born, allocated_at, requests, questions, allocates) is None
+
+
+def test_the_doh_says_which_control_connection_of_the_gateway_carried_each_question():
+    """With a round trip (the tunnel goes through a socket pair) and with none (the socket itself): two connections to the DoH, each with its
+    own question, and a third that asks nothing. The number the DoH gives is the one the gateway logged for that CONNECT."""
+    import _turn_chain as chain_mod
+    from _doh_servers import DOH_BOOTSTRAP
+    from test_the_udp_chain_helper import _resolve_through_doh, _socks_connect
+    for rtt in (0, 10):
+        with chain_mod.Chain(rtt_ms=rtt, relay_host="127.0.0.1") as chain:
+            _resolve_through_doh(chain, chain_mod.PAGE_NAME)
+            stranger, code = _socks_connect(chain, "127.0.0.1", chain.page.port)           # a CONNECT that asks the DoH nothing
+            assert code == 0
+            _resolve_through_doh(chain, chain_mod.TURN_NAME)
+            stranger.close()
+            connects = {r[3]: r[1] for r in chain.requests if r[2] == "connect"}
+            doh_connections = [r[1] for r in chain.requests if r[2] == "connect" and r[3].startswith(DOH_BOOTSTRAP)]
+            assert [q[2] for q in chain.doh.question_connections] == doh_connections and len(set(doh_connections)) == 2, rtt
+            assert connects["127.0.0.1:%d" % chain.page.port] not in doh_connections
+            asked = [q for q in chain.doh.question_connections if q[0] == chain_mod.TURN_NAME]
+            road, others = turn_road_connections(0.0, 1e9, chain.requests, asked)
+            assert [r[1] for r in road] == [asked[0][2]] and len(others) == 2, rtt
 
 
 def test_the_gateway_logs_the_greeting_the_connect_and_the_associate_of_each_connection_and_only_those():
