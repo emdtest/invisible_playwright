@@ -738,3 +738,62 @@ def test_a_page_of_an_issuer_the_engine_does_not_trust_makes_no_ocsp_request(fir
         assert ocsp_responder.requests == [], "an untrusted issuer made an OCSP request: %s" % ocsp_responder.requests
     finally:
         server.close()
+
+
+# ------------------------------------------------------------------------------------- a lookup a context leaves after it closed
+def test_a_beacon_sent_as_a_context_closes_resolves_through_its_proxy(firefox_binary, engine_at_least, lab, doh, gateway, trap, watcher,
+                                                                       engine_log):
+    """A page of a context behind the gateway sends a beacon on ``pagehide`` to a name it never looked up; the context is closed. The
+    beacon leaves after ``context.close()`` returns, so its name is looked up once the context is gone: it must still be asked of the DoH
+    through the context's proxy, never of the machine's resolver. On firefox-64 every one of these lookups went native (the engine dropped
+    an ended context from the list its resolver reads; hunt 43733181674: 10 of 10 on Linux and on Windows, ``Calling getaddrinfo``); it is
+    how the OCSP request of a closing context leaked once (run 43717860248). Fixed in firefox-65."""
+    engine_at_least("firefox-65")
+    import threading as _threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    first, late = "beacon-%s.lab.test" % lab.nonce, "late-%s.lab.test" % lab.nonce
+    arrived = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _answer(self):
+            arrived.append(self.path)
+            if self.path.startswith("/page"):
+                body = ("<!doctype html><title>beacon</title><script>addEventListener('pagehide', () => "
+                        "navigator.sendBeacon('http://%s:%d/late', 'x'));</script>" % (late, port)).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(204)
+                self.end_headers()
+
+        do_GET = do_POST = _answer
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    _threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        doh.names[first] = "127.0.0.1"
+        doh.names[late] = "127.0.0.1"
+        proxy = gateway("gw-context")
+        with _launch(firefox_binary) as browser:
+            context = browser.new_context(proxy=proxy.proxy, ignore_https_errors=True)
+            page = context.new_page()
+            page.goto("http://%s:%d/page" % (first, port), wait_until="load", timeout=30000)
+            context.close()
+            beacon = ds.wait_until(lambda: "/late" in arrived, EVIDENCE_SECONDS)
+        watcher.stop()
+        sink = EgressSink(lab.witness, watcher, engine_log, lab.nonce, trap)
+        why = "\n  requests that arrived: %s; DoH vias of %s: %s" % (arrived, late, sorted(doh.vias_of(late, QTYPE_A))) + _why(doh, proxy)
+        assert sink.blind_problems() == [], "the sink cannot be trusted: %s" % sink.blind_problems() + why
+        assert sink.leak_problems() == [], "; ".join(sink.leak_problems()) + why
+        # The work was done, by the road of the context: the beacon arrived, and its name was asked of the DoH by the context's gateway.
+        assert beacon, "the beacon sent as the context closed never arrived (nothing was looked up, so nothing was proved)" + why
+        assert doh.vias_of(late, QTYPE_A) == {proxy.name}, "%s was not asked of the DoH by the gateway of the context only" % late + why
+    finally:
+        server.shutdown()
