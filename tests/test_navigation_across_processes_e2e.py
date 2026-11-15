@@ -151,16 +151,22 @@ def test_a_goto_to_another_site_stopped_by_the_page_it_leaves_raises_aborted(fir
 def test_a_second_goto_to_a_third_site_interrupts_the_first_and_lands(firefox_binary, sites):
     async def scenario(page):
         await page.goto(sites["at"]("a.test", "/plain"))
+        # The responses the client heard: the one of the first goto is the moment its headers and the start of its body
+        # reached the parent, which is where the navigation is handed to the process of b.test. A document that has its
+        # start but not its end does not commit (CI of 15/11, run 43763144152: "neither committed nor been aborted"), so
+        # the URL of the page is not the condition; the response is.
+        responses = []
+        page.on("response", lambda r: responses.append(urlsplit(r.url).path))
 
         async def go(url, after=None):
             if after is not None:
-                # the first response is there and the rest is held: the navigation has changed process, which is
-                # when the page is at the address of the first goto (a condition, not 1 s after the request arrived)
-                seen = await awatch(lambda: (after in sites["arrived"], page.url),
-                                    lambda state: state[0] and urlsplit(state[1]).hostname == "b.test",
+                # the first response is there and the rest is held: the navigation is on its way to another process
+                # (a condition, not 1 s after the request arrived)
+                seen = await awatch(lambda: (after in sites["arrived"], after in responses),
+                                    lambda state: state[0] and state[1],
                                     GOTO_TIMEOUT_MS / 1000, lambda: asyncio.sleep(0.02))
                 if not seen.ok:
-                    return "the first goto never committed on b.test; seen: %s" % seen.render()
+                    return "the client never heard the response of the first goto; seen: %s" % seen.render()
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
                 return None
