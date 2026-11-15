@@ -48,6 +48,7 @@ from invisible_core.juggler import connection as juggler
 from invisible_core.juggler.actions import Actions
 from invisible_core.juggler.deadline import Deadline
 from . import _bindings, dialogs
+from ._reaped import SessionRemoval
 from ._threads import ThreadStarterLease
 from .pointer import Pointer
 from .dispatcher import (Dispatcher, ExpectNotMet, ProtocolException,
@@ -6218,7 +6219,10 @@ class BrowserTypeDispatcher(Dispatcher):
         named = {e["name"] for e in params.get("env") or []}
         environment.update({k: v for k, v in session_env.items() if k not in named})
         files = SessionFiles(params.get("userDataDir"), environment)
-        self.server.after_shutdown(files.remove)
+        # ⛔ WITH A CORE THAT GIVES THE LAUNCH A REAPER the removal is handed to it once `conn.close` has returned (see
+        # `_reaped`); without one it runs here, after the hooks, as before.
+        removal = SessionRemoval(files.remove, getattr(getattr(files, "token", None), "value", ""))
+        self.server.after_shutdown(removal.after_shutdown)
         env, profile = files.env, files.profile
         # ⛔ THE TYPING SEED TRAVELS IN THE PREFS AND IS TAKEN OUT AGAIN HERE,
         # before a single byte reaches the profile.
@@ -6281,7 +6285,7 @@ class BrowserTypeDispatcher(Dispatcher):
                               headless=bool(params.get("headless", True)),
                               env=env, argv_extra=params.get("args") or [],
                               ready_timeout=ready, proxy=proxy)
-        self.server.on_shutdown(conn.close)
+        self.server.on_shutdown(lambda: removal.close(conn))
         # ⛔ A LAUNCH THAT FAILS FROM HERE ON CLOSES THE BROWSER IT STARTED.
         # A browser that is running and was never handed to the caller is one
         # nobody will close before the server shuts down.
