@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.52.1] - 2026-11-14
+## [0.52.1] - 2026-11-15
 
-Same pin as 0.52.0 (invisible-core 64.71.0).
+### Changed
+- Pins invisible-core 64.73.0 (same engine, firefox-64). The compositor is now declared in software on every machine, as a
+  retail Firefox reports on a machine without a usable GPU, and never read from the host. Before, the hardware compositor
+  was declared over a software adapter, which cost about 6x the CPU in the GPU process.
+- Windows: the engine is created inside a job of its own, so a launch no longer scans every process of the machine to bind
+  the engine's tree. (#498)
+- Several browsers in one async program no longer slow one another down:
+  - `connect()` starts no thread on the event loop (#497).
+  - The virtual display of `headless=True` starts off the event loop (#499).
+  - Closing a browser waits for its processes and removes its profile without holding the loop that serves the others:
+    with four browsers in one process the loop was held for up to about 0.5 s per close, and is not held now.
+- Comments, the fork notes and one test message no longer point at scripts that were deleted (the transport comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes. (#458)
 
 ### Added
 - `page.expose_function`, `page.expose_binding`, `context.expose_function` and `context.expose_binding`, as in Playwright: the page calls a Python function and gets a promise (the value, a rejection when the function raised, an await when it is async). The page sees the function and nothing else (no name of ours on the window, no init script); an engine without `Page.addBinding` is refused with a clear sentence. Arguments and results cross as JSON. (#471)
@@ -18,8 +29,11 @@ Same pin as 0.52.0 (invisible-core 64.71.0).
 - A context init script added after a page exists runs once in it, not twice. (#469)
 - A CORS preflight (an OPTIONS request that no route holds) is no longer reported to the client, as in Playwright's own server: `page.on("request")`, `route` and a request counter hear of one request fewer for each preflighted fetch of the page. (#467)
 
-### Changed
-- Comments, the fork notes and one test message no longer point at scripts that were deleted (the transport comparison scripts and the prefs byte-parity gate: no round ran them). No behaviour changes. (#458)
+### Tests
+- Every test module is checked to leave no browser open (a census of the connection threads, which needs no package to run). (#497, #500)
+- Software compositing is declared: the compositor in use, the CPU of the GPU process, and the bytes a page reads compared
+  against a recorded reference, on Linux and Windows. (#501)
+- The UDP bench survives a loaded Windows machine, and its verdict says what it saw. (#502)
 
 ## [0.52.0] - 2026-11-14
 
