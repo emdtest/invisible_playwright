@@ -1,13 +1,24 @@
-"""`close()` returns when the BROWSER has exited, and what is left of the launch is the reaper's.
+"""`close()` returns when the BROWSER has exited, while what outlives it is still alive; the rest is the reaper's.
 
 ⛔ THE KNOWN-BAD INPUT: invisible-core's `Connection.close` stopped waiting for the sender of the shutdown pings (it leaves by
 itself within about a second) and gave it to the launch's reaper, but the wrapper's server still ran `SessionFiles.remove`
-right after the shutdown, and that waits for the sender and the tree: the close of the wrapper took as long as before. The
-server hands the removal to the reaper now (`_juggler/_reaped.py`).
+right after the shutdown, and that waits for the sender and the tree: the close of the wrapper took as long as the sender
+lived. The server hands the removal to the reaper now (`_juggler/_reaped.py`), and the teardown's last reap is the reaper's too.
 
-Measured on the real engine: the time from the exit of the engine's parent process (read with psutil on its pid) to the
-return of the session's exit. And once the reaper has finished (`wait_reaped`) nothing of the session is left: no process, and
-no profile directory.
+CAUSAL, NOT TIMED: no clock decides this test. The test keeps alive, itself, the process that outlives the browser: a fake
+sender that blocks on a pipe the test holds and exits only when the test closes it. The core knows it for what it is by its
+command line (`process.outlives_the_browser`: `--backgroundtask pingsender`), and it is a member of the launch's tree as the core
+sees it:
+
+- Linux: the engine is the leader of a process group of its own and the tree is that group; the sender joins it with
+  `setpgid(0, engine's pgid)`, which is what a child of the engine is born with;
+- Windows: the tree is the launch's job (`EngineJob`); the sender is assigned to it with `AssignProcessToJobObject` on the job's
+  own handle, which is what the kernel does for a child of the engine.
+
+Then: `close()` returns while the sender is ALIVE (red on the code that waited for it: there the close returns only once the
+sender is gone, ended by the grace or released by the safety timer below, and the message says which). The test releases it,
+waits for the reaper's end by its condition (`wait_reaped`; the 30 s is a safety net, never a measure), and nothing of the
+session is left: no process, and no profile directory.
 
 A core with no reaper fails this test, with the reason: it is the test of the core that has one, and a skip would let the pin
 move to a core that waits again without anyone seeing it.
@@ -15,16 +26,26 @@ move to a core that waits again without anyone seeing it.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+import textwrap
 import threading
-import time
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.wall_clock]
+pytestmark = pytest.mark.e2e
 
-#: From the exit of the browser to the return of the close. The pings' sender needs 0.6 s (Linux) to 1.0 s (Windows) to leave,
-#: and the close must not have waited for it.
-RETURN_WITHIN_S = 0.5
+#: The test releases the sender by itself after this long if `close()` has not returned, so that the run of a code that waits for
+#: the sender ends and says so instead of hanging. A safety net: the test passes or fails by what is alive, never by this.
+SAFETY_RELEASE_S = 60.0
+
+#: The fake sender: it says it is there, then blocks until the test closes its stdin.
+_SENDER = textwrap.dedent("""
+    import sys
+    sys.stdout.write("up\\n")
+    sys.stdout.flush()
+    sys.stdin.read()
+""")
 
 
 def _the_core_has_a_reaper() -> None:
@@ -66,45 +87,83 @@ def _profile_of(proc):
     return None
 
 
-def test_the_close_returns_when_the_browser_has_exited_and_the_reaper_leaves_nothing(firefox_binary):
-    _the_core_has_a_reaper()
-    import psutil
+def _start_sender_in(tree):
+    """A process the core takes for the sender of the shutdown pings, and a member of ``tree``: it lives until its stdin is closed."""
+    from invisible_core.process import outlives_the_browser
 
-    from invisible_core.process import SessionToken, find_processes, wait_until_gone
+    argv = [sys.executable, "-c", _SENDER, "--backgroundtask", "pingsender"]
+    assert outlives_the_browser(argv), "the core would not take this command line for the sender's: %r" % (argv,)
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        job = tree.job
+        assert job is not None and job.handle, "the launch has no job on Windows: nothing to put the sender in"
+        sender = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        if not kernel32.AssignProcessToJobObject(job.handle, int(sender._handle)):
+            error = ctypes.get_last_error()
+            sender.kill()
+            pytest.fail("the sender could not be put in the launch's job (Windows error %d)" % error, pytrace=False)
+    else:
+        assert tree.group, "the launch's tree is not the engine's process group: nowhere to put the sender"
+        sender = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  preexec_fn=lambda: os.setpgid(0, tree.pid))
+    assert sender.stdout.readline().strip() == b"up", "the fake sender did not start"
+    return sender
+
+
+def test_the_close_returns_while_the_sender_lives_and_the_reaper_leaves_nothing(firefox_binary):
+    _the_core_has_a_reaper()
+    from invisible_core.process import SessionToken, find_processes, registered_trees, wait_until_gone
     from invisible_playwright import InvisiblePlaywright
     from invisible_playwright._juggler._reaped import wait_reaped
 
-    exited_at = []
+    sender = None
+    released_by_the_timer = threading.Event()
+
+    def release() -> None:
+        try:
+            sender.stdin.close()
+        except Exception:
+            pass
+
+    def release_after_the_safety_period() -> None:
+        released_by_the_timer.set()
+        release()
+
+    timer = None
     session = InvisiblePlaywright(seed=7104, binary_path=firefox_binary, humanize=False, headless=True)
-    with session as browser:
-        page = browser.new_page()
-        page.set_content("<p>a page, so a content process exists</p>")
-        token = SessionToken(session._session_token.value)
-        engine = _the_engine_parent(find_processes(token))
-        profile = _profile_of(engine)
-        assert profile and os.path.isdir(profile), "the engine's profile was not found: %r" % (profile,)
+    try:
+        with session as browser:
+            page = browser.new_page()
+            page.set_content("<p>a page, so a content process exists</p>")
+            token = SessionToken(session._session_token.value)
+            trees = registered_trees(token)
+            assert trees, "the launch registered no tree for its token"
+            engine = _the_engine_parent(find_processes(token))
+            profile = _profile_of(engine)
+            assert profile and os.path.isdir(profile), "the engine's profile was not found: %r" % (profile,)
+            sender = _start_sender_in(trees[0])
+            assert sender.pid in {p.pid for p in trees[0].members()}, "the sender is not a member of the launch's tree"
+            timer = threading.Timer(SAFETY_RELEASE_S, release_after_the_safety_period)
+            timer.daemon = True
+            timer.start()
+        # The session is closed: the browser has exited.
+        assert sender.poll() is None, (
+            "close() returned only after the sender was gone (%s): it waited for what outlives the browser, which is the "
+            "reaper's" % ("released by the test's safety timer" if released_by_the_timer.is_set()
+                          else "ended by the grace of the removal"))
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if sender is not None:
+            release()
 
-        def watch() -> None:
-            while True:
-                try:
-                    if not engine.is_running() or engine.status() == psutil.STATUS_ZOMBIE:
-                        break
-                except psutil.Error:
-                    break
-                time.sleep(0.005)
-            exited_at.append(time.monotonic())
-
-        watcher = threading.Thread(target=watch, daemon=True, name="engine-exit-watch")
-        watcher.start()
-    returned_at = time.monotonic()
-    watcher.join(timeout=30)
-    assert exited_at, "the engine's parent process was still running 30 s after the close returned"
-    took = returned_at - exited_at[0]
-    assert took <= RETURN_WITHIN_S, (
-        "close() returned %.3f s after the browser's exit (limit %.1f s): it waited for the sender of the pings or the tree, "
-        "which are the reaper's" % (took, RETURN_WITHIN_S))
-
-    assert wait_reaped(token, timeout=30), "the reaper did not finish within 30 s of the close"
+    sender.wait(timeout=30)
+    assert wait_reaped(token, timeout=30), "the reaper did not finish within 30 s of the sender's end"
     assert wait_until_gone(token, timeout=30), "processes of the session after the reaper: %s" % [
         (p.pid, p.name()) for p in find_processes(token)]
     assert not os.path.exists(profile), "the profile is still there once the reaper has finished: %s" % profile
