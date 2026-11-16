@@ -54,9 +54,11 @@ from invisible_core.juggler import (
     plan_aimless_move, plan_approach, plan_idle, plan_scroll,
     steps_from_waypoints, tail_within,
 )
-from invisible_core.juggler.connection import ReplyTimeout
+from invisible_core.juggler.connection import (
+    ProtocolError, ReplyTimeout, TargetClosedError)
 from invisible_core.juggler.deadline import Deadline
-from invisible_core.juggler.injected import ContextDestroyed, EvaluationError
+from invisible_core.juggler.injected import (
+    ContextDestroyed, EvaluationError, FrameDetached)
 from invisible_core.seedmix import sub_seed
 
 from .. import _cursor
@@ -88,10 +90,12 @@ _LANDING_MIN_BOX_PX = 12.0
 _LANDING_SPREAD = 0.14
 _LANDING_KEEP = 0.26
 
-#: What a probe of the page can legitimately answer while we are only AIMING:
-#: the element went away, the frame navigated, the page closed.
-_PROBE_ERRORS = (ContextDestroyed, EvaluationError, ReplyTimeout,
-                 ProtocolException, TimeoutError)
+#: What the ENGINE and the page can legitimately answer while we are only AIMING or walking: the element went away, the frame
+#: navigated or detached, the page or the browser closed (`TargetClosedError`), a command was refused or not answered. These are
+#: the errors that motion never turns into the action's failure (the action meets the same state itself and raises its own).
+#: Nothing else is in it on purpose: an AttributeError, a TypeError or a NameError out of the path is OUR bug, and it comes out.
+_PROBE_ERRORS = (ContextDestroyed, EvaluationError, FrameDetached, ReplyTimeout,
+                 ProtocolError, ProtocolException, TargetClosedError, TimeoutError)
 
 
 # ── the clock ───────────────────────────────────────────────────────────────
@@ -625,7 +629,7 @@ class Pointer:
         override = None
         try:
             override = self.approach(frame_id, selector, position, trial)
-        except Exception as exc:  # noqa: BLE001 - motion never fails an action
+        except _PROBE_ERRORS as exc:  # motion never fails an action for what the engine or the page answers; a bug of ours is not that
             _cursor._warn_once(
                 "approach-failed",
                 "the cursor approach raised (%s: %s); the action itself is "
@@ -667,7 +671,7 @@ class Pointer:
         hand.action += 1
         try:
             self._travel(x, y)
-        except Exception as exc:  # noqa: BLE001
+        except _PROBE_ERRORS as exc:  # what the engine or the page answers, not a bug of ours (see `_PROBE_ERRORS`)
             _cursor._warn_once(
                 "move-failed",
                 "the cursor path raised during %s (%s: %s); the action "
@@ -770,7 +774,7 @@ class Pointer:
                     return True
             finally:
                 hand.busy = False
-        except Exception as exc:  # noqa: BLE001
+        except _PROBE_ERRORS as exc:  # what the engine or the page answers, not a bug of ours (see `_PROBE_ERRORS`)
             _cursor._warn_once(
                 "wheel-failed",
                 "the scroll planner raised (%s: %s); the scroll itself is "

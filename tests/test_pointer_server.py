@@ -366,12 +366,22 @@ def test_an_offscreen_target_is_left_to_the_action(clock):
     assert page.log == []
 
 
-def test_a_broken_planner_never_fails_the_action(clock, monkeypatch):
+def test_a_broken_planner_comes_out_of_the_action_and_an_engine_error_does_not(clock, monkeypatch):
+    """Motion never fails an action for what the engine or the page answers (`_PROBE_ERRORS`); a planner that raises something else
+    is a bug of ours and comes out (it used to be swallowed with a warning, as every exception was:
+    tests/test_motion_never_hides_a_programming_error.py)."""
     page = build_page(clock, _boxes_of("x"), seed=4242, number=0, budget=1.5)
 
     def boom(*a, **k):
         raise RuntimeError("planner broke")
     monkeypatch.setattr(pointer_mod, "plan_approach", boom)
+    with pytest.raises(RuntimeError, match="planner broke"):
+        play(page, clock, [["click", "#b"]])
+    assert [e for e in page.log if e["type"] != "mousemove"] == []
+
+    def refused(*a, **k):
+        raise pointer_mod.ProtocolError("the browser refused it")
+    monkeypatch.setattr(pointer_mod, "plan_approach", refused)
     with pytest.warns(RuntimeWarning, match="approach raised"):
         play(page, clock, [["click", "#b"]])
     assert [e["type"] for e in page.log if e["type"] != "mousemove"] == [
