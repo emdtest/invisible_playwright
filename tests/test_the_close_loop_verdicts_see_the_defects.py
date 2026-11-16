@@ -9,7 +9,11 @@ Here the instrument of that test (its own source, taken out of the client script
   could not see (red);
 * a loop the machine did not schedule is not charged for the time it waited: what is charged never exceeds what the same samples saw run;
 * the other browsers: calls that did not begin and end inside the close, or a removal of the profile that only went on at its deadline
-  because nothing could answer while it waited, are red.
+  because nothing could answer while it waited, are red;
+* the removal of the profile that the client holds still: the thread that reaches it is read off the stack the client records (here
+  with a real `Reaper` of invisible-core, alive and finished: `run` and `_continue`), and it is red when it is the loop's thread, a
+  thread inside a step of the close or a thread that is not the reaper's; the close that returns only after the release, and the
+  removal that is never reached, are red.
 
 Every wait here ends when the thing it waits for happened (30 s is the deadline of a hang): nothing decides by a number of milliseconds.
 """
@@ -26,6 +30,8 @@ import traceback
 
 import psutil
 import pytest
+
+from invisible_core.process import Reaper
 
 import _close_loop_verdicts as verdicts
 import test_closing_one_of_four_browsers_does_not_hold_the_loop_e2e as e2e
@@ -61,6 +67,15 @@ def _instrument_class(main_id):
              "time": time, "traceback": traceback, "psutil": psutil, "main_id": main_id}
     exec(compile(source, "client_instrument", "exec"), scope)
     return scope["Instrument"]
+
+
+def _where_the_removal_runs(main_id):
+    """`where_the_removal_runs` of the client, exactly as the e2e writes it, bound to the thread that is the loop's."""
+    text = e2e._CLIENT
+    source = text[text.index("def where_the_removal_runs"):text.index("async def pinger")]
+    scope = {"os": os, "threading": threading, "traceback": traceback, "main_id": main_id}
+    exec(compile(source, "client_where", "exec"), scope)
+    return scope["where_the_removal_runs"]
 
 
 def _run_on_a_loop(scenario):
@@ -273,12 +288,141 @@ def test_a_removal_that_went_on_only_at_its_deadline_is_red():
     assert problem is not None and "deadline" in problem
 
 
-def test_the_hold_of_the_removal_is_not_asked_when_no_removal_ran_in_the_close():
-    # Another test says the removal must have run (`test_the_removal_of_the_profile_ran_inside_the_close`); this verdict still asks
-    # for the calls inside the close.
+def test_the_hold_of_the_removal_is_not_asked_when_no_removal_was_reached():
+    # Another verdict says the removal must have been reached (`removal_never_reached_problem`); this one still asks for the calls
+    # inside the close.
     assert verdicts.others_answered_problem(_others(), {"reached": False, "released_by": None}) is None
     assert verdicts.others_answered_problem(_others(inside=(1, 1, 0)), {"reached": False, "released_by": None}) is not None
 
 
 def test_fewer_than_three_other_browsers_followed_is_red():
     assert verdicts.others_answered_problem(_others()[:2], {"reached": True, "released_by": "answered"}) is not None
+
+
+def test_a_browser_that_answered_nothing_while_the_removal_was_held_is_red():
+    problem = verdicts.others_answered_problem(_others(removal=(2, 0, 1)), {"reached": True, "released_by": "answered"})
+    assert problem is not None and "[1]" in problem
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# the removal of the profile that the client holds still: WHO reaches it
+# ---------------------------------------------------------------------------------------------------------------------------------
+
+class _Tree:
+    """The tree of a reaper that is still working: `end` returns when the test lets it (the sender of the pings still alive)."""
+
+    def __init__(self):
+        self.go = threading.Event()
+
+    def end(self, *, grace=0.0, timeout=5.0):
+        self.go.wait(30)
+
+    def release(self):
+        pass
+
+
+def _removal_by(where, how):
+    """What the client records of a removal reached the way ``how(step)`` runs it: a step that calls the hook (`slow_rmtree`, one
+    frame above `where_the_removal_runs`) and keeps what it recorded."""
+    got = []
+
+    def slow_rmtree():
+        got.append(dict(where(), path="/tmp/invisible_profile_x"))
+
+    how(slow_rmtree)
+    assert len(got) == 1, "the step did not run"
+    return {"reached": True, "released_by": "answered", "order": ["reached", "close_returned", "released"], "removal": got[0]}
+
+
+def _on_a_reaper_that_is_alive(step):
+    tree = _Tree()
+    reaper = Reaper(tree)
+    reaper.start()
+    reaper.then(step)               # handed over while it works: the step runs on its own thread, after the tree
+    tree.go.set()
+    reaper.join(30)
+    assert reaper.finished
+
+
+def _on_a_reaper_that_has_finished(step):
+    reaper = Reaper(None)
+    reaper.start()
+    reaper.join(30)
+    assert reaper.finished
+    reaper.then(step)               # handed over after the end: the step runs on a continuation of it
+    reaper.join(30)
+    assert reaper.finished
+
+
+@pytest.mark.parametrize("how, frame", [(_on_a_reaper_that_is_alive, "process.py:run"), (_on_a_reaper_that_has_finished, "process.py:_continue")])
+def test_a_removal_reached_by_the_reaper_or_its_continuation_is_green(how, frame):
+    # The frames are the real ones of invisible-core's `Reaper`: the verdict reads the stack the way the client records it.
+    gate = _removal_by(_where_the_removal_runs(threading.get_ident()), how)
+    assert any(f.endswith(frame) for f in gate["removal"]["stack"]), gate["removal"]["stack"]
+    assert gate["removal"]["ident"] != gate["removal"]["loop_ident"]
+    assert verdicts.removal_on_the_users_thread_problem(gate) is None, verdicts.removal_on_the_users_thread_problem(gate)
+
+
+def test_a_removal_reached_on_the_loops_thread_is_red():
+    gate = _removal_by(_where_the_removal_runs(threading.get_ident()), lambda step: step())
+    problem = verdicts.removal_on_the_users_thread_problem(gate)
+    assert problem is not None and "thread of the loop" in problem
+
+
+def test_a_removal_reached_inside_a_step_of_the_close_is_red():
+    # The shutdown of the server (a thread of the close that the user waits on) removes the profile itself: no reaper was handed it.
+    shutdown = _function("def shutdown(step):\n    step()\n", _CLOSE_STEP_FILE, "shutdown")
+    gate = _removal_by(_where_the_removal_runs(threading.get_ident()),
+                       lambda step: _join(threading.Thread(target=shutdown, args=(step,), name="invisible-teardown")))
+    assert gate["removal"]["ident"] != gate["removal"]["loop_ident"]
+    problem = verdicts.removal_on_the_users_thread_problem(gate)
+    assert problem is not None and _CLOSE_STEP_FILE + ":shutdown" in problem
+
+
+def test_a_removal_reached_on_a_thread_that_is_not_the_reapers_is_red():
+    gate = _removal_by(_where_the_removal_runs(threading.get_ident()),
+                       lambda step: _join(threading.Thread(target=step, name="invisible-teardown")))
+    problem = verdicts.removal_on_the_users_thread_problem(gate)
+    assert problem is not None and "not the reaper's" in problem
+
+
+def test_a_removal_that_was_reached_and_left_no_thread_is_red():
+    assert verdicts.removal_on_the_users_thread_problem({"reached": True, "removal": None}) is not None
+    assert verdicts.removal_on_the_users_thread_problem({"reached": False, "removal": None}) is None
+
+
+def _join(thread):
+    thread.start()
+    thread.join(30)
+    assert not thread.is_alive()
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# the order: the close returns while the removal is held
+# ---------------------------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("order", [
+    ["reached", "close_returned", "released"],
+    ["close_returned", "reached", "released"],
+])
+def test_a_close_that_returned_before_the_release_is_green_whenever_the_removal_was_reached(order):
+    assert verdicts.close_waited_for_the_removal_problem({"order": order, "released_by": "answered"}) is None
+
+
+def test_a_close_that_returned_only_after_the_release_is_red():
+    # The removal was reached on a thread the close waits on: the close could not return while it was held, the deadline released
+    # it and only then the close returned.
+    problem = verdicts.close_waited_for_the_removal_problem(
+        {"order": ["reached", "released", "close_returned"], "released_by": "deadline"})
+    assert problem is not None and "deadline" in problem
+    assert verdicts.close_waited_for_the_removal_problem({"order": ["reached"], "released_by": None}) is not None
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------
+# the removal that is never reached
+# ---------------------------------------------------------------------------------------------------------------------------------
+
+def test_a_removal_that_was_never_reached_is_red():
+    problem = verdicts.removal_never_reached_problem({"reached": False, "released_by": None, "order": ["close_returned"], "removal": None})
+    assert problem is not None and "never" in problem
+    assert verdicts.removal_never_reached_problem({"reached": True}) is None
