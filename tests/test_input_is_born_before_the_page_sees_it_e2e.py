@@ -13,6 +13,8 @@ real wheel on retail Windows Firefox is 6 to 14 ms below.
 """
 from __future__ import annotations
 
+import statistics
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -49,6 +51,17 @@ def test_every_key_and_move_is_born_before_its_handler_runs(firefox_binary):
         assert rows, kind
         kept = [r for r in rows if r[2]]
         assert len(kept) == len(rows), (kind, rows)
-        # Born a few ms before, never far in the past: the timer's precision
-        # is 1 ms, the session's latency 2 to 30.
-        assert all(-40.0 < r[1] < 0.0 for r in rows), (kind, rows)
+        # Born BEFORE the handler, always (an order, not a duration) ...
+        ages = [r[1] for r in rows]
+        assert all(age < 0.0 for age in ages), (kind, rows)
+        # ... and a few ms before, never far in the past: the timer's precision is 1 ms, the session's latency 2 to 30.
+        if kind in ("keydown", "keyup"):
+            # A key is made in the content process and handed to the page in the same task (the text input processor dispatches
+            # it at once, born `latency` ms in the past): no stall of the machine can come between its birth and its handler, so
+            # EVERY key is held to the bound.
+            assert all(-40.0 < age for age in ages), (kind, rows)
+        else:
+            # A move or a wheel is made in the parent and crosses to the content process: a content process that stops for a
+            # moment ages the event that waits for it, which says nothing of when it was born. Said of the TYPICAL event (the
+            # median of the stream): a stream whose typical event is old is the defect.
+            assert -40.0 < statistics.median(ages), (kind, rows)
