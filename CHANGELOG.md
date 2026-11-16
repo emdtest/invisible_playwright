@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-16
+
+### Engine firefox-65
+- Keys, clicks and the mouse path stay on their planned timing under load.
+- A second `goto` that starts while a site is changing process no longer hangs.
+- The isolated worlds of init scripts are always created.
+- A worker comes back with its page from the back-forward cache.
+- The names looked up as a context closes go through that context's proxy.
+- `close()` returns when the browser has exited, and never interrupts it while it exits.
+
+### Changed
+- Pins invisible-core 65.74.0 and with it the engine firefox-65.
+- The path of the cursor leaves as one stroke. The approach, the walk before a click, the wheel burst and the idle movement hand their
+  planned timeline to the core's `Actions.walk`, which sends each point at its planned instant on the client's own clock, without waiting
+  for the reply of the one before; the replies are collected at the end. Before, each point was a command of its own that waited for the
+  engine's reply, and a slow reply was a pause in the path that the page saw (2.6 s measured on a GitHub runner), with the points after it
+  crowded together. A lone `mouse.down`, `mouse.up` or one-step `mouse.move` is still a single command that waits for its reply, as in Playwright.
+- `close()` returns when the browser has exited, and the removal of the session's directories and the last reap of its tree are left to the
+  reaper of the launch (invisible-core 65.74.0), instead of being done at once and waiting for the sender of the shutdown pings. A session
+  that is over is forgotten by the registry of reapers, so a long-lived server no longer keeps one entry per session.
+- The download and upload folders of a session are removed by the reapers of its launches, after the tree has ended, and no longer on
+  the server's shutdown thread that the user's exit waits for (4 profiles removed together took up to 2.5 s on Windows). With no reaper
+  they are removed at once, as before.
+
+### Fixed
+- The cursor's motion never fails an action for what the engine or the page answers (a closed target, a detached frame, a refused or
+  unanswered command), and no longer hides a bug of ours: an error of our own in the path (an `AttributeError`, a `TypeError`) comes out of
+  the action instead of being swallowed with one warning and a click that goes out with no path.
+
+### Removed
+- `pytest-rerunfailures` from the `dev` extra. No run of this repository reruns a test (the e2e run refuses the plugin by name, `-p no:rerunfailures`).
+
+### Tests
+- The e2e tests wait for a condition with a deadline of 30 s, not for a clock, and the workers share no port: a Marionette port per launch,
+  the HTTP/3 server serves on the UDP socket its picker held. A test that is red now says what
+  it saw. (#507, #511, #514)
+- The shelved engine line is firefox-66; its 15 tests wait for it. (#509)
+- A loop late in its selector is not held; only the time its thread runs counts. (#508)
+- A check that the e2e tests do not wait on clocks, share ports, write the environment or reach the world; the debt of that check only shrinks.
+- The whole unit suite is a required suite of the candidate: 1988 tests on Linux and 1989 on Windows.
+- The click and pointer benches count a stroke's instants on their virtual clock, and the key-delay test reads the browser's own event
+  time stamps. (#516)
+- The e2e workflow uploads the junit of every pass of the run (Linux, and each Windows part), green or red.
+
 ## [0.52.1] - 2026-11-15
 
 ### Changed
