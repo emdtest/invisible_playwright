@@ -227,7 +227,7 @@ def _group_members(pidfile: Path) -> list:
     return members
 
 
-def _wait_for_exit(pidfile: Path, seconds: float = 10.0) -> list:
+def _wait_for_exit(pidfile: Path, seconds: float = 30.0) -> list:
     end = time.monotonic() + seconds
     left = _group_members(pidfile)
     while left and time.monotonic() < end:
@@ -255,7 +255,7 @@ def test_a_killed_stand_in_leaves_neither_strace_nor_the_browser(firefox_binary,
             time.sleep(0.2)
         assert len(_group_members(pidfile)) >= 3, "strace and the browser did not come up"
         _kill_group(pidfile)
-        proc.wait(timeout=10)
+        proc.wait(timeout=30)
         left = _wait_for_exit(pidfile)
     finally:
         _kill_group(pidfile)

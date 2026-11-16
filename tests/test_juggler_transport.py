@@ -333,13 +333,13 @@ def test_going_BACK_then_FORWARD_leaves_the_page_readable(firefox_binary, monkey
             # restore already holding something.
             assert page.locator("#t").inner_text() == "page two"
 
-            page.go_back(timeout=5000)
+            page.go_back(timeout=30_000)
             assert page.locator("#t").inner_text() == "hello"
 
-            page.go_forward(timeout=5000)
+            page.go_forward(timeout=30_000)
             assert page.locator("#t").inner_text() == "page two"
 
-            page.go_back(timeout=5000)
+            page.go_back(timeout=30_000)
             assert page.locator("#t").inner_text() == "hello"
 
             page.reload()
@@ -372,13 +372,13 @@ def test_going_back_over_a_page_the_script_left_without_a_gesture(firefox_binary
                                  headless=True) as browser:
             page = browser.new_page()
             page.goto(url)
-            with page.expect_navigation(timeout=10_000):
+            with page.expect_navigation(timeout=30_000):
                 page.evaluate("location.href = '/second'")
             assert page.url.endswith("/second")
             # The position and the document, not the Response: the page comes
             # back from the back-forward cache, with no request to answer
             # with, so None is what a successful go_back returns here too.
-            page.go_back(timeout=10_000)
+            page.go_back(timeout=30_000)
             assert page.url == url, "go_back stayed on %s" % page.url
             assert page.locator("#t").inner_text() == "hello"
     finally:

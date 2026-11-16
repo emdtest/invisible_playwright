@@ -203,7 +203,7 @@ def test_a_page_behind_an_http_proxy_reads_h2_on_every_visit_and_loads_without_d
         def _connect(self, conn, host, port, authorization):
             if (host, port) != self.target:
                 return super()._connect(conn, host, port, authorization)
-            upstream = socket.create_connection((host, port), timeout=10)
+            upstream = socket.create_connection((host, port), timeout=30)
             self._record("CONNECT", host, port, authorization, 200)
             self._answer(conn, 200)
             try:

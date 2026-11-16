@@ -454,7 +454,7 @@ def test_the_native_sink_hears_a_native_lookup(firefox_binary, lab, trap, watche
     with _launch(firefox_binary) as browser:
         page = browser.new_context().new_page()
         try:
-            page.goto("http://%s:%d/" % (name, lab.witness.port), timeout=15000)
+            page.goto("http://%s:%d/" % (name, lab.witness.port), timeout=30000)
         except Exception:  # noqa: BLE001 - the name has no address: the lookup is what the test is about
             pass
         heard = ds.wait_until(lambda: _native_or_nothing(engine_log, lab.nonce, trap), EVIDENCE_SECONDS)

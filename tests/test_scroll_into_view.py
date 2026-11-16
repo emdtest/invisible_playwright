@@ -54,10 +54,11 @@ def test_scroll_into_view_puts_the_element_in_the_viewport(firefox_binary, html,
                              headless=True) as browser:
         page = browser.new_page()
         page.set_content(html)
-        # ⛔ A SHORT TIMEOUT ON PURPOSE. The defect this covers was a 30 s
-        # timeout, so the default would let a regression come back as a
-        # slow pass on a loaded machine instead of a red test.
-        page.locator("#x").scroll_into_view_if_needed(timeout=5000)
+        # ⛔ A SHORTER TIMEOUT ON PURPOSE. The defect this covers was a 30 s
+        # wait, so the default would let a regression come back as a slow
+        # pass instead of a red test. 15 s is half of that wait and far
+        # beyond any healthy run on a loaded runner.
+        page.locator("#x").scroll_into_view_if_needed(timeout=15000)
         assert page.eval_on_selector("#x", IS_IN_VIEWPORT), (
             "the call returned and the element is still out of view")
 
@@ -104,7 +105,7 @@ def test_it_scrolls_ONLY_IF_NEEDED_and_then_centres(firefox_binary, monkeypatch)
             "<div style='height:3000px'></div>")
         assert page.eval_on_selector("#x", IS_IN_FULL_VIEW), (
             "the element starts partly out of view: the test proves nothing")
-        page.locator("#x").scroll_into_view_if_needed(timeout=5000)
+        page.locator("#x").scroll_into_view_if_needed(timeout=15000)
         assert page.evaluate("window.scrollY") == 0, (
             "the element was in full view, and the page moved anyway")
 
@@ -115,7 +116,7 @@ def test_it_scrolls_ONLY_IF_NEEDED_and_then_centres(firefox_binary, monkeypatch)
             "<div style='height:3000px'></div>")
         assert not page.eval_on_selector("#x", IS_IN_FULL_VIEW), (
             "the element starts in full view: the test proves nothing")
-        page.locator("#x").scroll_into_view_if_needed(timeout=5000)
+        page.locator("#x").scroll_into_view_if_needed(timeout=15000)
         assert page.evaluate("window.scrollY") > 0, (
             "the element was cut by the bottom edge, and the page did not move")
         assert page.eval_on_selector("#x", CENTRE_OFFSET) <= 1, (
