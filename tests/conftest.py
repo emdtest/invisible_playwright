@@ -163,6 +163,30 @@ def _offline_session_geo(request, monkeypatch):
     monkeypatch.setattr(_session, "session_geo", lambda *_a, **_k: geo)
 
 
+@pytest.fixture(autouse=True)
+def _a_unit_test_does_not_depend_on_the_seal_of_whoever_runs_it(request, monkeypatch):
+    """Outside the e2e, a test does not read ``INVISIBLE_SEAL_FILE``.
+
+    The CI jobs export it (a LOCAL seal of the candidate, with no published assets) for the e2e tests that launch the engine under test. A unit test
+    that composes a launch (``build_env``, ``launch_persistent_context``, a second browser served by a virtual display) reaches ``ensure_binary`` and
+    died with ``SealError: the active seal ... is a LOCAL seal with no published assets`` only because of where it ran. Here the variable is taken out
+    of the test's environment (``monkeypatch`` puts it back), and the seal the process had already resolved is dropped, so the test resolves the
+    packaged one; a test that wants a seal sets the variable itself, after this. The e2e tests, which are the ones that need it, keep it."""
+    if request.node.get_closest_marker("e2e") is not None:
+        yield
+        return
+    try:
+        from invisible_core.seal import _reset_active_seal_for_tests
+    except Exception:  # the package is absent: the tests that need it say so
+        _reset_active_seal_for_tests = None
+    monkeypatch.delenv("INVISIBLE_SEAL_FILE", raising=False)
+    if _reset_active_seal_for_tests is not None:
+        _reset_active_seal_for_tests()
+    yield
+    if _reset_active_seal_for_tests is not None:
+        _reset_active_seal_for_tests()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _the_lab_declares_the_exit(request, tmp_path_factory):
     """Where an e2e launch leaves from is DECLARED, not asked of three services of the internet.
