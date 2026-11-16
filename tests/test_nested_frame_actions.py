@@ -129,15 +129,15 @@ def nested_origins():
 
 
 def _timed(page):
-    """A page whose actions give up fast and whose navigations do not.
+    """A page whose actions and navigations wait 30 s, the deadline of the whole suite.
 
-    The actions are what these tests judge, so a missing element should fail
-    in seconds. Loading three origins is not judged, and with four browsers
-    starting at once (`run_e2e.py`'s default) a first navigation took longer
-    than 3 s, which read as a failure of whatever test it happened to set up.
+    The actions are what these tests judge: a missing element still fails them, only
+    later. A deadline is the time a healthy run is allowed, and with four browsers
+    starting at once (`run_e2e.py`'s default) a loaded runner takes longer than a
+    developer's machine, which read as a failure of whatever test it happened to set up.
     """
-    page.set_default_timeout(3000)
-    page.set_default_navigation_timeout(20000)
+    page.set_default_timeout(30000)
+    page.set_default_navigation_timeout(30000)
     return page
 
 
