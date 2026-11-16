@@ -17,7 +17,7 @@ from invisible_playwright import _engine
 from test_seal_binary_path import ENTRY_REL, active  # noqa: F401  (``active`` is a fixture)
 
 
-def test_real_stock_firefox_via_binary_path_is_refused(active):
+def test_real_stock_firefox_via_binary_path_is_refused(active):  # noqa: F811  (the fixture imported above)
     """The cell as it exists on this machine, not a synthetic stand-in. Read
     only; skips cleanly when no bundled Playwright Firefox is present."""
     local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData/Local")
