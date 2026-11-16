@@ -243,6 +243,9 @@ _CLIENT = textwrap.dedent("""
         # one that runs ON the loop stops the only thread that could read their answers, and goes on only at the deadline. How the
         # hold ended (`released_by`) is the verdict; a slow machine only makes the answers come later.
         real_rmtree = shutil.rmtree
+        # set while the first browser closes; it exists before the hook is installed, because a launch removes directories too
+        # (Windows, run 43796271124: "cannot access free variable 'closing'" from the launch of the first browser)
+        closing = asyncio.Event()
         gate = {"since": None, "released_by": None, "all_answered": threading.Event()}
         gate_lock = threading.Lock()
 
@@ -269,7 +272,7 @@ _CLIENT = textwrap.dedent("""
             await page.set_content("<p id=n>browser %d</p>" % i)
         launched = len(engines())
 
-        closing, records = asyncio.Event(), []
+        records = []
         tasks = []
         for page in pages[1:]:
             record = {"stop": False, "inside": 0, "during_removal": 0, "slowest": 0.0}
