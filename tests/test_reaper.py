@@ -316,3 +316,116 @@ def test_a_process_whose_environment_cannot_be_read_is_left_alone():
             raise psutil.AccessDenied(pid=1)
 
     assert SessionToken('anything').matches(Unreadable()) is False
+
+
+class _FakeReaper:
+    """A launch's reaper as the core's: `then` keeps the step for the thread that ends the tree."""
+
+    def __init__(self):
+        self.steps = []
+        self.finished = False
+
+    def then(self, step):
+        if self.finished:
+            step()
+        else:
+            self.steps.append(step)
+
+    def join(self, timeout=None):
+        pass
+
+    def finish(self):
+        steps, self.steps = self.steps, []
+        for step in steps:
+            step()
+        self.finished = True
+
+
+def test_the_final_reap_with_a_reaper_runs_after_it_and_spares_the_sender_until_then():
+    """⛔ THE KNOWN-BAD INPUT: the teardown's last step ended the session's tree at once, and with the core's reaper what is
+    left at that moment is the sender of the shutdown pings: it was killed in the middle of its work and the reaper's grace
+    was for nothing. A process that carries the token (the sender's stand-in) is alive after `final_reap` and until the
+    reaper has finished; then the reap ends it."""
+    from invisible_playwright._juggler import _reaped
+
+    token = SessionToken.mint()
+    sender = _spawn(token)
+    reaper = _FakeReaper()
+    _reaped._reapers[token.value] = [reaper]
+    try:
+        time.sleep(0.6)
+        assert _reaped.final_reap(guard_for(), token) == 0
+        assert sender.poll() is None, "the final reap killed the sender before the reaper had finished"
+        assert sender.pid in {p.pid for p in find_processes(token)}
+        reaper.finish()
+        assert _reaper.wait_until_gone(token, timeout=8.0), "the final reap did not run after the reaper"
+    finally:
+        _reaped._reapers.pop(token.value, None)
+        _reap_all(sender)
+
+
+def test_the_final_reap_without_a_reaper_is_immediate():
+    """No reaper (a core before it, a launch that failed first): the reap ends the tree now, as it always did."""
+    from invisible_playwright._juggler import _reaped
+
+    token = SessionToken.mint()
+    proc = _spawn(token)
+    try:
+        time.sleep(0.6)
+        assert _reaped.final_reap(guard_for(), token) >= 1
+        assert _reaper.wait_until_gone(token, timeout=8.0)
+    finally:
+        _reap_all(proc)
+
+
+def test_the_final_reap_with_two_reapers_runs_once_after_both():
+    from invisible_playwright._juggler import _reaped
+
+    calls = []
+
+    class Guard(NullGuard):
+        def reap(self, token, *, timeout: float = 5.0) -> int:
+            calls.append(token.value)
+            return 0
+
+    token = SessionToken.mint()
+    first, second = _FakeReaper(), _FakeReaper()
+    _reaped._reapers[token.value] = [first, second]
+    try:
+        _reaped.final_reap(Guard(), token)
+        first.finish()
+        assert calls == []
+        second.finish()
+        assert calls == [token.value]
+    finally:
+        _reaped._reapers.pop(token.value, None)
+
+
+def test_the_sync_teardown_leaves_the_final_reap_to_the_reaper_of_the_launch():
+    from invisible_playwright import InvisiblePlaywright
+    from invisible_playwright._juggler import _reaped
+
+    reaped = []
+
+    class Recording(NullGuard):
+        def reap(self, token, *, timeout: float = 5.0) -> int:
+            reaped.append(token.value)
+            return 0
+
+    session = InvisiblePlaywright(seed=7)
+    session._session_token = SessionToken.mint()
+    session._lifetime_guard = Recording()
+    expected = session._session_token.value
+    reaper = _FakeReaper()
+    _reaped._reapers[expected] = [reaper]
+    try:
+        session._teardown()
+        assert reaped == [], "the teardown reaped at once and did not leave it to the reaper"
+        reaper.finish()
+        assert reaped == [expected]
+    finally:
+        _reaped._reapers.pop(expected, None)
+    # No reaper: immediate.
+    session._session_token = SessionToken.mint()
+    session._teardown()
+    assert len(reaped) == 2

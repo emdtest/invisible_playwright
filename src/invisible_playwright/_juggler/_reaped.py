@@ -88,3 +88,34 @@ def wait_reaped(token: Any, timeout: Optional[float] = None) -> bool:
             else:
                 _reapers.pop(value, None)
     return done
+
+
+def final_reap(guard: Any, token: Any) -> int:
+    """The teardown's last step: whatever still carries the session's ``token`` is ended.
+
+    ⛔ WHEN THE SESSION'S LAUNCHES HAVE A REAPER THE LAST REAP IS ITS TO RUN. `guard.reap` ends the session's tree at once, and
+    what is left at that moment is the sender of the shutdown pings: ended here, the pings were lost and the grace the reaper
+    gives it was for nothing. The reap is handed to the reapers (`then`), so it runs after the grace and the end of what is left,
+    and it is the net it always was for what the reaper did not end. Returns at once then, with 0: nothing is waited for.
+
+    With no reaper (a core before the one that makes them, a launch that failed before it had one, an error path that never
+    reached the shutdown) it runs now, as it always did. Never raises on the reapers' side; the guard's own errors reach the
+    caller as they did."""
+    value = getattr(token, "value", token)
+    with _lock:
+        reapers = list(_reapers.get(value, ()))
+    if not reapers:
+        return guard.reap(token)
+    pending = [len(reapers)]
+    gate = threading.Lock()
+
+    def after_the_last() -> None:
+        with gate:
+            pending[0] -= 1
+            if pending[0]:
+                return
+        guard.reap(token)
+
+    for reaper in reapers:
+        reaper.then(after_the_last)
+    return 0
