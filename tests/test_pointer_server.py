@@ -179,9 +179,11 @@ def build_page(clock, boxes, *, seed, number, budget, hits="all", draws=True,
 def clock(monkeypatch):
     c = VirtualClock()
     monkeypatch.setattr(pointer_mod, "_CLOCK", c)
-    # the core's actions pause with `time.sleep` (press settle, dwell)
+    # the core's actions pause with `time.sleep` (press settle, dwell) and a stroke counts its instants on `time.monotonic`: both
+    # are THIS clock, or a stroke that waits "until instant X" waits for it again after every sleep that did not move the real one.
+    # `perf_counter` is not read on this path: the pacer's clock is the `now`/`sleep` the pointer hands the core (`_CLOCK`).
     monkeypatch.setattr(core_actions, "time", SimpleNamespace(
-        sleep=c.sleep, monotonic=time.monotonic, perf_counter=time.perf_counter))
+        sleep=c.sleep, monotonic=c.now, perf_counter=time.perf_counter))
     monkeypatch.delenv(_cursor.ENGINE_ENV, raising=False)
     monkeypatch.delenv(_cursor.LANDING_ENV, raising=False)
     _cursor._reset_warnings()
@@ -220,8 +222,9 @@ def play(page, clock, ops):
 
 
 def _normalised(log):
-    # JSON round trip: the golden is JSON, and a float survives it exactly.
-    return json.loads(json.dumps(log))
+    # JSON round trip: the golden is JSON, and a float survives it exactly. `stroke` and `at` are the tags of the core's strokes, which
+    # 5d9ad70 did not send: what the golden holds is the events and the instants they went out at, which the log's `t` still is.
+    return [{k: v for k, v in e.items() if k not in ("stroke", "at")} for e in json.loads(json.dumps(log))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -363,12 +366,22 @@ def test_an_offscreen_target_is_left_to_the_action(clock):
     assert page.log == []
 
 
-def test_a_broken_planner_never_fails_the_action(clock, monkeypatch):
+def test_a_broken_planner_comes_out_of_the_action_and_an_engine_error_does_not(clock, monkeypatch):
+    """Motion never fails an action for what the engine or the page answers (`_PROBE_ERRORS`); a planner that raises something else
+    is a bug of ours and comes out (it used to be swallowed with a warning, as every exception was:
+    tests/test_motion_never_hides_a_programming_error.py)."""
     page = build_page(clock, _boxes_of("x"), seed=4242, number=0, budget=1.5)
 
     def boom(*a, **k):
         raise RuntimeError("planner broke")
     monkeypatch.setattr(pointer_mod, "plan_approach", boom)
+    with pytest.raises(RuntimeError, match="planner broke"):
+        play(page, clock, [["click", "#b"]])
+    assert [e for e in page.log if e["type"] != "mousemove"] == []
+
+    def refused(*a, **k):
+        raise pointer_mod.ProtocolError("the browser refused it")
+    monkeypatch.setattr(pointer_mod, "plan_approach", refused)
     with pytest.warns(RuntimeWarning, match="approach raised"):
         play(page, clock, [["click", "#b"]])
     assert [e["type"] for e in page.log if e["type"] != "mousemove"] == [
