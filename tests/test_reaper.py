@@ -15,11 +15,14 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
 
+from invisible_core import process as core_process
 from invisible_playwright import _reaper
+from invisible_playwright._juggler import _reaped
 from invisible_playwright._reaper import (
     JobObjectGuard, NullGuard, SessionToken, find_processes, guard_for,
 )
@@ -414,3 +417,58 @@ def test_the_final_reap_leaves_no_entry_when_it_was_the_only_launch():
     assert token.value in _reaped._reapers
     reaper.finish()
     assert token.value not in _reaped._reapers, "the entry of a finished session stays for ever"
+
+# --- the removal handed to a reaper that has already finished (moved here from a file of its own, so the unit rows name it) ---
+# The removal of the session's directories never runs on the shutdown thread, not even when the launch's reaper has finished.
+#
+# Found in a hunt on Windows (4 browsers of one process closed together): `SessionRemoval.close` hands the removal to the launch's reaper
+# with `reaper.then`, and the core's `then` ran the step at once, on the caller, when the reaper had already finished. The caller was the
+# `juggler-shutdown` thread, which `__aexit__` waits for, and the removal (four profile directories deleted together, 0.4 to 2.5 s) kept
+# the user's close from returning: 12 of 24 closes came back more than 0.5 s after the browser had exited.
+#
+# The core's reaper (`invisible_core.process.Reaper`) now gives a step handed after its end to a continuation thread, covered by `join()`,
+# `finished` and so by `wait_reaped`. This test uses the core's own reaper, finished, and no clock: the removal is held on an Event.
+_FINISHED_TOKEN = "removal-after-a-finished-reaper"
+#: A safety net for the waits of a test, never a measure.
+_FINISHED_NET = 60
+
+
+def test_a_close_with_a_finished_reaper_returns_while_the_removal_is_held_and_wait_reaped_waits_for_it():
+    reaper = core_process.Reaper(None)
+    reaper.start()
+    reaper.join(_FINISHED_NET)
+    assert reaper.finished
+
+    removal_started, release, removed = threading.Event(), threading.Event(), threading.Event()
+    where = {}
+
+    def remove() -> None:
+        where["thread"] = threading.current_thread()
+        removal_started.set()
+        assert release.wait(_FINISHED_NET)
+        removed.set()
+
+    conn = type("Conn", (), {"reaper": reaper, "close": lambda self, *a, **k: None})()
+    removal = _reaped.SessionRemoval(remove, _FINISHED_TOKEN)
+    returned = threading.Event()
+
+    def shutdown() -> None:                  # the `juggler-shutdown` thread, which the user's close waits for
+        removal.close(conn)
+        returned.set()
+
+    closer = threading.Thread(target=shutdown, name="juggler-shutdown", daemon=True)
+    try:
+        closer.start()
+        assert removal_started.wait(_FINISHED_NET), "the removal never ran"
+        # On a core before the fix the removal runs inside `close`, on this thread, and it cannot return while it is held.
+        assert where["thread"] is not closer, "the removal ran on the shutdown thread"
+        assert returned.wait(_FINISHED_NET), "the close did not return"
+        assert not removed.is_set(), "the close returned only after the removal had ended"
+        assert _reaped.wait_reaped(_FINISHED_TOKEN, timeout=0) is False, "wait_reaped said done while the removal was held"
+        release.set()
+        assert _reaped.wait_reaped(_FINISHED_TOKEN, timeout=_FINISHED_NET) is True
+        assert removed.is_set()
+    finally:
+        release.set()
+        closer.join(_FINISHED_NET)
+        _reaped._reapers.pop(_FINISHED_TOKEN, None)
