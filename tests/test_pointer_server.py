@@ -179,9 +179,11 @@ def build_page(clock, boxes, *, seed, number, budget, hits="all", draws=True,
 def clock(monkeypatch):
     c = VirtualClock()
     monkeypatch.setattr(pointer_mod, "_CLOCK", c)
-    # the core's actions pause with `time.sleep` (press settle, dwell)
+    # the core's actions pause with `time.sleep` (press settle, dwell) and a stroke counts its instants on `time.monotonic`: both
+    # are THIS clock, or a stroke that waits "until instant X" waits for it again after every sleep that did not move the real one.
+    # `perf_counter` is not read on this path: the pacer's clock is the `now`/`sleep` the pointer hands the core (`_CLOCK`).
     monkeypatch.setattr(core_actions, "time", SimpleNamespace(
-        sleep=c.sleep, monotonic=time.monotonic, perf_counter=time.perf_counter))
+        sleep=c.sleep, monotonic=c.now, perf_counter=time.perf_counter))
     monkeypatch.delenv(_cursor.ENGINE_ENV, raising=False)
     monkeypatch.delenv(_cursor.LANDING_ENV, raising=False)
     _cursor._reset_warnings()
