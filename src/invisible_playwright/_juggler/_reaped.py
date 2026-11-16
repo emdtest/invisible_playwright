@@ -114,8 +114,24 @@ def final_reap(guard: Any, token: Any) -> int:
             pending[0] -= 1
             if pending[0]:
                 return
-        guard.reap(token)
+        try:
+            guard.reap(token)
+        finally:
+            # ⛔ THE ENTRY GOES WITH THE LAST REAP: a process that opens sessions without end (the server) would keep one per
+            # session, with its reapers and their trees. Only the reapers of THIS snapshot are taken out: a launch registered
+            # under the same token meanwhile keeps its own.
+            _forget(value, reapers)
 
     for reaper in reapers:
         reaper.then(after_the_last)
     return 0
+
+
+def _forget(value: str, reapers: List[Any]) -> None:
+    """Takes ``reapers`` out of the token's entry, and the entry with them when nothing else is in it."""
+    with _lock:
+        kept = [r for r in _reapers.get(value, ()) if not any(r is gone for gone in reapers)]
+        if kept:
+            _reapers[value] = kept
+        else:
+            _reapers.pop(value, None)

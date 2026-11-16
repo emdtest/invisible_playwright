@@ -429,3 +429,38 @@ def test_the_sync_teardown_leaves_the_final_reap_to_the_reaper_of_the_launch():
     session._session_token = SessionToken.mint()
     session._teardown()
     assert len(reaped) == 2
+
+
+def test_the_final_reap_takes_its_reapers_out_of_the_registry_even_when_the_reap_raises():
+    """⛔ A server that opens sessions without end kept an entry per session, with the reapers and their trees, until somebody
+    asked `wait_reaped`. The entry goes with the last reap, in a `finally`; a launch registered under the same token in the
+    meantime keeps its reaper."""
+    from invisible_playwright._juggler import _reaped
+
+    class Raising(NullGuard):
+        def reap(self, token, *, timeout: float = 5.0) -> int:
+            raise RuntimeError("the reap failed")
+
+    token = SessionToken.mint()
+    old, newer = _FakeReaper(), _FakeReaper()
+    _reaped._reapers[token.value] = [old]
+    try:
+        _reaped.final_reap(Raising(), token)
+        _reaped._reapers[token.value].append(newer)       # a launch of the same token, registered meanwhile
+        with pytest.raises(RuntimeError):
+            old.finish()
+        assert _reaped._reapers[token.value] == [newer], "the snapshot's reapers were not taken out, or the newer one was"
+    finally:
+        _reaped._reapers.pop(token.value, None)
+
+
+def test_the_final_reap_leaves_no_entry_when_it_was_the_only_launch():
+    from invisible_playwright._juggler import _reaped
+
+    token = SessionToken.mint()
+    reaper = _FakeReaper()
+    _reaped._reapers[token.value] = [reaper]
+    _reaped.final_reap(NullGuard(), token)
+    assert token.value in _reaped._reapers
+    reaper.finish()
+    assert token.value not in _reaped._reapers, "the entry of a finished session stays for ever"
