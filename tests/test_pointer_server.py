@@ -222,8 +222,9 @@ def play(page, clock, ops):
 
 
 def _normalised(log):
-    # JSON round trip: the golden is JSON, and a float survives it exactly.
-    return json.loads(json.dumps(log))
+    # JSON round trip: the golden is JSON, and a float survives it exactly. `stroke` and `at` are the tags of the core's strokes, which
+    # 5d9ad70 did not send: what the golden holds is the events and the instants they went out at, which the log's `t` still is.
+    return [{k: v for k, v in e.items() if k not in ("stroke", "at")} for e in json.loads(json.dumps(log))]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
