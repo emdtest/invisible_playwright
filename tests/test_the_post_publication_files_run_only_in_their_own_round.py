@@ -66,8 +66,22 @@ def test_the_round_after_the_publication_names_both_files_and_nothing_else_does(
     for name in post.FILES:
         assert (TESTS / name).is_file(), name
     suites = json.loads((ROOT / "ci" / "required-suites.json").read_text(encoding="utf-8"))
-    listed = [t for row in suites for t in row["tests"] if Path(t.split("::")[0]).name in post.FILES]
+    listed = _listed_in_a_row_that_could_run_their_e2e(suites)
     assert listed == [], "a required suite lists a file that the runs leave out: %s" % listed
+
+
+def _listed_in_a_row_that_could_run_their_e2e(suites):
+    """The post-publication files named by a row whose marker does not exclude the e2e. A row of the marker ``not slow and not e2e`` (the whole unit suite)
+    names ``test_release_e2e.py`` for its one offline test and the marker keeps its e2e tests out, which naming the file would otherwise bring back."""
+    return [t for row in suites if "not e2e" not in row["marker"] for t in row["tests"] if Path(t.split("::")[0]).name in post.FILES]
+
+
+def test_a_row_of_the_e2e_that_names_a_post_publication_file_is_refused_and_one_that_excludes_the_e2e_is_not():
+    release = "tests/test_release_e2e.py"
+    row = {"id": "x", "tests": [release, "tests/test_upgrade_e2e.py::test_a"], "marker": "e2e"}
+    assert _listed_in_a_row_that_could_run_their_e2e([row]) == [release, "tests/test_upgrade_e2e.py::test_a"]
+    assert _listed_in_a_row_that_could_run_their_e2e([dict(row, marker="unit")]) != []
+    assert _listed_in_a_row_that_could_run_their_e2e([dict(row, marker="not slow and not e2e")]) == []
     for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
         if workflow.name == "user-install.yml":
             continue
