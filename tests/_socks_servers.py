@@ -374,10 +374,10 @@ class Gateway:
     def _open_upstream(self, target: Tuple[str, int]) -> socket.socket:
         """The TCP connection of a CONNECT: from ``exit_host`` when ``tcp_from_exit``, else from wherever the system chooses."""
         if not self.tcp_from_exit:
-            return socket.create_connection(target, timeout=10)
+            return socket.create_connection(target, timeout=30)
         up = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            up.settimeout(10)
+            up.settimeout(30)
             up.bind((self.exit_host, 0))
             up.connect(target)
         except OSError:
@@ -678,7 +678,7 @@ class Socks5TcpOnly:
                 conn.close()
                 return
             try:
-                upstream = socket.create_connection((addr, port), timeout=15)
+                upstream = socket.create_connection((addr, port), timeout=30)
             except OSError:
                 conn.sendall(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")  # host unreachable
                 conn.close()
