@@ -96,6 +96,18 @@ def pytest_runtest_teardown(item, nextitem):
         faulthandler.cancel_dump_traceback_later()
 
 
+def pytest_collection_modifyitems(config, items):
+    """The e2e tests of the post-publication files (``tests/_post_publication.py``: pip, uv, PyPI, GitHub) belong to the round after a publication: a run
+    that does not NAME their file does not run them. ``user-install.yml`` names both files; ``scripts/run_e2e.py`` and every PR or candidate leg do not."""
+    import _post_publication
+
+    left = [item for item in items
+            if item.get_closest_marker("e2e") is not None and _post_publication.is_left_out(item.path, config.args)]
+    if left:
+        items[:] = [item for item in items if item not in left]
+        config.hook.pytest_deselected(items=left)
+
+
 def pytest_unconfigure(config):
     global _watchdog_handle
     if _watchdog_handle is not None:
@@ -149,6 +161,65 @@ def _offline_session_geo(request, monkeypatch):
         return
     geo = SessionGeo("America/New_York", None, locale=decide_session_locale("en-US"))
     monkeypatch.setattr(_session, "session_geo", lambda *_a, **_k: geo)
+
+
+@pytest.fixture(autouse=True)
+def _a_unit_test_does_not_depend_on_the_seal_of_whoever_runs_it(request, monkeypatch):
+    """Outside the e2e, a test does not read ``INVISIBLE_SEAL_FILE``.
+
+    The CI jobs export it (a LOCAL seal of the candidate, with no published assets) for the e2e tests that launch the engine under test. A unit test
+    that composes a launch (``build_env``, ``launch_persistent_context``, a second browser served by a virtual display) reaches ``ensure_binary`` and
+    died with ``SealError: the active seal ... is a LOCAL seal with no published assets`` only because of where it ran. Here the variable is taken out
+    of the test's environment (``monkeypatch`` puts it back), and the seal the process had already resolved is dropped, so the test resolves the
+    packaged one; a test that wants a seal sets the variable itself, after this. The e2e tests, which are the ones that need it, keep it."""
+    if request.node.get_closest_marker("e2e") is not None:
+        yield
+        return
+    try:
+        from invisible_core.seal import _reset_active_seal_for_tests
+    except Exception:  # the package is absent: the tests that need it say so
+        _reset_active_seal_for_tests = None
+    monkeypatch.delenv("INVISIBLE_SEAL_FILE", raising=False)
+    if _reset_active_seal_for_tests is not None:
+        _reset_active_seal_for_tests()
+    yield
+    if _reset_active_seal_for_tests is not None:
+        _reset_active_seal_for_tests()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _the_lab_declares_the_exit(request, tmp_path_factory):
+    """Where an e2e launch leaves from is DECLARED, not asked of three services of the internet.
+
+    A launch with no proxy asks the core's ``discover_egress_ip`` for its exit, which asks api.ipify.org, icanhazip.com and checkip.amazonaws.com: a
+    third party in every one of the 222 launches that name neither ``timezone=`` nor ``proxy=``. For a session in which an e2e test is selected, the
+    question with no proxy is answered the exit of the lab (``tests/_lab_egress.py``), and the GeoIP database is the lab's when no leg set one. SESSION
+    scope, because the module-scoped browsers of several files launch before any function-scoped fixture; a test that replaces the question (an exit
+    behind its own gateway) does it with ``monkeypatch`` and goes back to this answer. A session with no e2e test selected is left as it is: the unit
+    tests of the discovery call the real function."""
+    if not any(item.get_closest_marker("e2e") is not None for item in request.session.items):
+        yield None
+        return
+    import _lab_egress
+
+    with pytest.MonkeyPatch.context() as patch:
+        yield _lab_egress.install(patch, tmp_path_factory.mktemp("lab-geoip"))
+
+
+@pytest.fixture
+def local_egress_echo(monkeypatch):
+    """The REAL discovery of the exit, for the test that must prove it, against an echo service of its own on loopback: the three services of the
+    product are replaced by one that answers :data:`_lab_egress.LAB_EGRESS_IP` and counts its questions. Nothing goes to the internet."""
+    from invisible_core import _geo
+
+    import _lab_egress
+
+    current = _geo.discover_egress_ip
+    monkeypatch.setattr(_geo, "discover_egress_ip", getattr(current, "original", current))
+    echo = _lab_egress.EchoService()
+    monkeypatch.setattr(_geo, "_IP_ECHO_ENDPOINTS", (echo.url,))
+    yield echo
+    echo.close()
 
 
 @pytest.fixture

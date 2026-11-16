@@ -17,6 +17,7 @@ from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
 from invisible_core._offloop import off_the_loop
 from ._reaper import SessionToken, guard_for
+from ._juggler._reaped import final_reap
 
 
 class InvisiblePlaywright(_session.CommonLaunch):
@@ -359,7 +360,7 @@ class InvisiblePlaywright(_session.CommonLaunch):
                 # ⛔ NOT ON THE LOOP: `reap` waits for the tree of the session to be gone. It runs in a thread of its own
                 # (`off_the_loop`); a cancellation of this task stops the waiting and not the reaping, which runs to its end.
                 try:
-                    await off_the_loop(self._lifetime_guard.reap, self._session_token)
+                    await off_the_loop(final_reap, self._lifetime_guard, self._session_token)
                 except asyncio.CancelledError as stop:
                     cancelled = stop
                 except Exception:
