@@ -43,7 +43,11 @@ class SessionRemoval:
         self._remove()
 
     def after_shutdown(self) -> None:
-        """The step the server runs once its hooks have: the removal itself, unless the reaper has been handed it."""
+        """The step the server runs once its hooks have: the removal itself, unless the reaper has been handed it.
+
+        ⛔ ON THIS ROUTE THERE IS NO LAUNCH THREAD TO HAND THE STEP TO: `close` did not hand it, because the connection has no
+        reaper (a core before the one that makes them, or a close that raised), so the removal runs where it is, here. The
+        session's other steps (`after_the_reapers`) are the ones that wait for the reapers."""
         with self._lock:
             if self._handed:
                 return
@@ -90,22 +94,26 @@ def wait_reaped(token: Any, timeout: Optional[float] = None) -> bool:
     return done
 
 
-def final_reap(guard: Any, token: Any) -> int:
-    """The teardown's last step: whatever still carries the session's ``token`` is ended.
+def after_the_reapers(step: Callable[[], Any], *tokens: Any, forget: bool = False) -> Any:
+    """Runs ``step`` once, after the last of the reapers of the launches made under ``tokens`` (a `SessionToken` or its
+    value each), and returns at once with None when it was handed over. With no reaper at all it runs now, on the caller,
+    and its result is returned: the way it always ran.
 
-    ⛔ WHEN THE SESSION'S LAUNCHES HAVE A REAPER THE LAST REAP IS ITS TO RUN. `guard.reap` ends the session's tree at once, and
-    what is left at that moment is the sender of the shutdown pings: ended here, the pings were lost and the grace the reaper
-    gives it was for nothing. The reap is handed to the reapers (`then`), so it runs after the grace and the end of what is left,
-    and it is the net it always was for what the reaper did not end. Returns at once then, with 0: nothing is waited for.
+    ⛔ THE ONE PLACE FOR "AFTER THE SESSION'S REAPERS". A step that the server's shutdown thread or the user's close would run
+    waits there for what the reaper waits for (the sender of the shutdown pings, the tree), and a folder's removal is as slow
+    as the disk. Handed to the reapers (`then`) it runs on the thread that ends the tree, after the grace, and nothing is
+    waited for. Nothing here assumes which thread runs the step: that is `Reaper.then`'s to say.
 
-    With no reaper (a core before the one that makes them, a launch that failed before it had one, an error path that never
-    reached the shutdown) it runs now, as it always did. Never raises on the reapers' side; the guard's own errors reach the
-    caller as they did."""
-    value = getattr(token, "value", token)
+    ``forget``: the reapers of this snapshot are taken out of the tokens' entries with the step (even when it raises): a
+    process that opens sessions without end (the server) would keep one entry per session, with its reapers and their trees.
+    Only the reapers of THIS snapshot go: a launch registered under the same token meanwhile keeps its own. Left False, the
+    entries stay for `wait_reaped`, which is what joins the reapers and takes them out. Never raises on the reapers' side;
+    the step's own errors reach whoever runs it."""
+    values = [getattr(token, "value", token) for token in tokens]
     with _lock:
-        reapers = list(_reapers.get(value, ()))
+        reapers = [r for value in values for r in _reapers.get(value, ())]
     if not reapers:
-        return guard.reap(token)
+        return step()
     pending = [len(reapers)]
     gate = threading.Lock()
 
@@ -115,16 +123,30 @@ def final_reap(guard: Any, token: Any) -> int:
             if pending[0]:
                 return
         try:
-            guard.reap(token)
+            step()
         finally:
-            # ⛔ THE ENTRY GOES WITH THE LAST REAP: a process that opens sessions without end (the server) would keep one per
-            # session, with its reapers and their trees. Only the reapers of THIS snapshot are taken out: a launch registered
-            # under the same token meanwhile keeps its own.
-            _forget(value, reapers)
+            if forget:
+                for value in values:
+                    _forget(value, reapers)
 
     for reaper in reapers:
         reaper.then(after_the_last)
-    return 0
+    return None
+
+
+def final_reap(guard: Any, token: Any) -> int:
+    """The teardown's last step: whatever still carries the session's ``token`` is ended.
+
+    ⛔ WHEN THE SESSION'S LAUNCHES HAVE A REAPER THE LAST REAP IS ITS TO RUN. `guard.reap` ends the session's tree at once, and
+    what is left at that moment is the sender of the shutdown pings: ended here, the pings were lost and the grace the reaper
+    gives it was for nothing. The reap is handed to the reapers (`after_the_reapers`), so it runs after the grace and the end of
+    what is left, and it is the net it always was for what the reaper did not end. Returns at once then, with 0: nothing is
+    waited for.
+
+    With no reaper (a core before the one that makes them, a launch that failed before it had one, an error path that never
+    reached the shutdown) it runs now, as it always did. Never raises on the reapers' side; the guard's own errors reach the
+    caller as they did."""
+    return after_the_reapers(lambda: guard.reap(token), token, forget=True) or 0
 
 
 def _forget(value: str, reapers: List[Any]) -> None:

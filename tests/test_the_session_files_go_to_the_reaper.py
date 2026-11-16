@@ -9,6 +9,7 @@ registered with `reaper.then` and does not run inside the shutdown; with a core 
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 
 import pytest
@@ -171,3 +172,63 @@ def test_wait_reaped_says_false_at_its_timeout():
     finally:
         _reaped._reapers.pop("slow-session", None)
         release.set()
+
+
+def _the_session_folders(server):
+    """Makes the two folders a session keeps beside its profile, the way a context and a file upload make them: the
+    downloads root (`BrowserDispatcher._downloads_dir`) and the upload root (`stage_upload`). Returns both roots."""
+    holder = type("Holder", (), {"_downloads_root": None, "server": server})()
+    module.BrowserDispatcher._downloads_dir(holder, "ctx-1")
+    uploaded = server.stage_upload({"name": "a.txt", "buffer": ""})
+    downloads = holder._downloads_root
+    uploads = server._upload_root
+    assert os.path.isdir(downloads) and os.path.isdir(uploads) and os.path.isfile(uploaded)
+    return downloads, uploads
+
+
+@pytest.mark.unit
+def test_with_a_reaper_alive_the_shutdown_leaves_the_downloads_and_upload_folders_to_it(monkeypatch, tmp_path):
+    engine = _Engine(_Reaper)
+    server, files = _launched(monkeypatch, engine, tmp_path)
+    downloads, uploads = _the_session_folders(server)
+    try:
+        server.shutdown()
+        assert os.path.isdir(downloads), "the shutdown thread removed the downloads root while the reaper was alive"
+        assert os.path.isdir(uploads), "the shutdown thread removed the upload root while the reaper was alive"
+        assert files.removed == 0
+    finally:
+        engine.reaper.finish()
+        _reaped.wait_reaped(TOKEN, timeout=5)
+        for root in (downloads, uploads):
+            shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.unit
+def test_once_the_reaper_is_released_the_two_folders_are_gone_when_wait_reaped_returns(monkeypatch, tmp_path):
+    engine = _Engine(_Reaper)
+    server, files = _launched(monkeypatch, engine, tmp_path)
+    downloads, uploads = _the_session_folders(server)
+    try:
+        server.shutdown()
+        assert len(engine.reaper.steps) == 3, "the removal and the two folders are the reaper's steps"
+        assert _reaped.wait_reaped(TOKEN, timeout=5) is True
+        assert not os.path.exists(downloads)
+        assert not os.path.exists(uploads)
+        assert files.removed == 1
+    finally:
+        for root in (downloads, uploads):
+            shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.unit
+def test_with_no_reaper_the_two_folders_are_gone_when_the_shutdown_returns(monkeypatch, tmp_path):
+    engine = _Engine(None)
+    server, files = _launched(monkeypatch, engine, tmp_path)
+    downloads, uploads = _the_session_folders(server)
+    try:
+        server.shutdown()
+        assert not os.path.exists(downloads), "with no reaper nobody else removes the downloads root"
+        assert not os.path.exists(uploads), "with no reaper nobody else removes the upload root"
+    finally:
+        for root in (downloads, uploads):
+            shutil.rmtree(root, ignore_errors=True)
