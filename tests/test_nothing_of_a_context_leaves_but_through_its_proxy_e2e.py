@@ -65,7 +65,7 @@ from typing import Callable, Dict, Optional
 
 import pytest
 
-from invisible_playwright import InvisiblePlaywright
+from _session_end import EndingPlaywright
 
 # The fixtures and the helpers of the DoH e2e (imported, not copied): the hermetic session (autouse) and the page in a context. `gateway`, `pages`,
 # `trap` and `watcher` are in conftest.py.
@@ -357,8 +357,8 @@ def engine_log(tmp_path, monkeypatch):
 
 def _launch(binary, proxy=None):
     """The session of the lab: NO proxy unless given (the default context is the machine's own network), the DoH provider of the FakeDoh."""
-    return InvisiblePlaywright(seed=42, binary_path=binary, proxy=proxy, headless=True,
-                               extra_prefs={**PREFS, **LAB_PREFS})
+    return EndingPlaywright(seed=42, binary_path=binary, proxy=proxy, headless=True,
+                            extra_prefs={**PREFS, **LAB_PREFS})
 
 
 def _the_proxy_of(case: Case, doh, gateway):
@@ -633,8 +633,8 @@ def ocsp_responder(lab):
 def _launch_trusting(binary, profile):
     """A persistent session on ``profile`` (the lab CA is in its NSS database), with NO proxy: its default context is the machine's own network
     and ``context.browser.new_context(proxy=...)`` makes the contexts that have one. No ``ignore_https_errors`` anywhere."""
-    return InvisiblePlaywright(seed=42, binary_path=binary, headless=True, profile_dir=profile,
-                               extra_prefs={**PREFS, **LAB_PREFS, **OCSP_PREFS})
+    return EndingPlaywright(seed=42, binary_path=binary, headless=True, profile_dir=profile,
+                            extra_prefs={**PREFS, **LAB_PREFS, **OCSP_PREFS})
 
 
 def _trusting_profile(binary, tmp_path, ca: LabCa):

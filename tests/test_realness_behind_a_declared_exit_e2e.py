@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from invisible_playwright import InvisiblePlaywright
+from _session_end import EndingPlaywright
 
 import _realness_support as rs
 import _trap_policy
@@ -81,8 +81,8 @@ def _truth_of(exit_ip):
 
 
 def _launch(binary, gateway, **extra):
-    return InvisiblePlaywright(seed=42, headless=True, binary_path=binary, proxy=gateway.proxy,
-                               udp_stun_servers=measure_servers(gateway), extra_prefs=dict(PREFS), **extra)
+    return EndingPlaywright(seed=42, headless=True, binary_path=binary, proxy=gateway.proxy,
+                            udp_stun_servers=measure_servers(gateway), extra_prefs=dict(PREFS), **extra)
 
 
 @pytest.fixture(scope="module", params=list(rs.EXITS), ids=list(rs.EXITS))
