@@ -5972,7 +5972,7 @@ class BrowserDispatcher(Dispatcher):
         if root is None:
             import shutil
             root = self._downloads_root = tempfile.mkdtemp(prefix="invpw-downloads-")
-            self.server.after_shutdown(
+            self.server.after_reapers(
                 lambda: shutil.rmtree(root, ignore_errors=True))
         path = os.path.join(root, context_id or "default")
         os.makedirs(path, exist_ok=True)
@@ -6221,7 +6221,9 @@ class BrowserTypeDispatcher(Dispatcher):
         files = SessionFiles(params.get("userDataDir"), environment)
         # ⛔ WITH A CORE THAT GIVES THE LAUNCH A REAPER the removal is handed to it once `conn.close` has returned (see
         # `_reaped`); without one it runs here, after the hooks, as before.
-        removal = SessionRemoval(files.remove, getattr(getattr(files, "token", None), "value", ""))
+        session_token = getattr(getattr(files, "token", None), "value", "")
+        removal = SessionRemoval(files.remove, session_token)
+        self.server.note_session_token(session_token)
         self.server.after_shutdown(removal.after_shutdown)
         env, profile = files.env, files.profile
         # ⛔ THE TYPING SEED TRAVELS IN THE PREFS AND IS TAKEN OUT AGAIN HERE,
@@ -6372,7 +6374,7 @@ class JugglerServer(Server):
         if root is None:
             root = tempfile.mkdtemp(prefix="invisible_upload_")
             self._upload_root = root
-            self.after_shutdown(lambda: remove_profile(root))
+            self.after_reapers(lambda: remove_profile(root))
         path = os.path.join(tempfile.mkdtemp(dir=root), name)
         with open(path, "wb") as out:
             out.write(base64.b64decode(payload.get("buffer") or ""))
