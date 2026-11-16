@@ -12,7 +12,7 @@ launch's reaper (`wait_reaped(token)`: the sender is finished or ended, the laun
 processes to be gone (`wait_until_gone`). The 30 s are a safety net, never a measure: the wait ends when the reaper does. A reaper that does not
 finish within them FAILS the test, with the processes that are left: going on in silence would put the next test back in the same room.
 
-Every session of the e2e files that run a resolver trap or a watcher is made with this class (`tests/test_every_trapped_session_ends_before_the_next_test.py`
+Every session of the e2e files that run a resolver trap or a watcher is made with this class (`tests/test_a_session_ends_before_the_next_test_starts.py`
 reads those files and fails on one that is not).
 """
 from __future__ import annotations
