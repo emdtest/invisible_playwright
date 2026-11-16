@@ -8,10 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.53.1] - 2026-11-16
 
-- 0.53.0 was tagged and never published: one of its tests read the page's address too early when the first of two navigations wins.
-- The contents are those of 0.53.0 (below), with that test corrected.
-
-## [0.53.0] - 2026-11-16
+0.53.0 was tagged but never published; its changes ship in 0.53.1. One of its tests read the page's address too early when the first of
+two navigations wins; 0.53.1 corrects that test.
 
 ### Engine firefox-65
 - Keys, clicks and the mouse path stay on their planned timing under load.
