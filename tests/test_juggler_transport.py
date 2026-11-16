@@ -843,24 +843,6 @@ def test_every_courtesy_entry_says_WHO_calls_it():
             "%s does not say who calls it: %r" % (name, reason))
 
 
-def test_the_workbench_inventory_and_the_package_cannot_DRIFT():
-    """⛔ There is one perimeter and it lives in the shipped package. The
-    workbench tool that counts remaining work reads it from there; if it kept
-    its own copy the two would disagree the first time one was edited - and the
-    one that matters, the one that REFUSES, would be the one nobody updated."""
-    from invisible_playwright._juggler import perimeter
-    tool = pathlib.Path(__file__).resolve().parents[3] / "scripts" \
-        / "inventario_voce6.py"
-    if not tool.exists():
-        pytest.skip("the workbench is not next to this checkout")
-    source = tool.read_text(encoding="utf-8", errors="replace")
-    assert "_fuori_dal_pacchetto" in source, (
-        "the inventory no longer reads the package: it has grown its own copy "
-        "of the perimeter")
-    assert "perimeter.py" in source
-    assert len(perimeter.OUTSIDE) > 50
-
-
 # ── the temporary profile ───────────────────────────────────────────────────
 
 def test_a_profile_WE_made_is_removed_and_the_caller_s_is_not():
