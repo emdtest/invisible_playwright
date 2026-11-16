@@ -19,6 +19,11 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
+#: The latency the core declares for an input event (invisible_core.juggler._behaviour.InputLatency.draw keeps it between these), and
+#: the precision of the page's timer.
+LATENCY_MIN_MS, LATENCY_MAX_MS = 2.0, 30.0
+TIMER_PRECISION_MS = 1.0
+
 PAGE = """<!doctype html><body style="margin:40px"><input id=q style="width:300px">
 <script>
 window.L = [];
@@ -51,17 +56,15 @@ def test_every_key_and_move_is_born_before_its_handler_runs(firefox_binary):
         assert rows, kind
         kept = [r for r in rows if r[2]]
         assert len(kept) == len(rows), (kind, rows)
-        # Born BEFORE the handler, always (an order, not a duration) ...
+        # EVERY event is born before its handler runs: the sign of its age, for each key and each move. An order, not a duration,
+        # so no load of the machine can turn it: a handler that runs late only makes the age more negative.
         ages = [r[1] for r in rows]
         assert all(age < 0.0 for age in ages), (kind, rows)
-        # ... and a few ms before, never far in the past: the timer's precision is 1 ms, the session's latency 2 to 30.
-        if kind in ("keydown", "keyup"):
-            # A key is made in the content process and handed to the page in the same task (the text input processor dispatches
-            # it at once, born `latency` ms in the past): no stall of the machine can come between its birth and its handler, so
-            # EVERY key is held to the bound.
-            assert all(-40.0 < age for age in ages), (kind, rows)
-        else:
-            # A move or a wheel is made in the parent and crosses to the content process: a content process that stops for a
-            # moment ages the event that waits for it, which says nothing of when it was born. Said of the TYPICAL event (the
-            # median of the stream): a stream whose typical event is old is the defect.
-            assert -40.0 < statistics.median(ages), (kind, rows)
+        # The TYPICAL event (the median of the stream) is as old as the declared latency: the core draws it between 2 and 30 ms
+        # (invisible_core.juggler._behaviour.InputLatency), and the page's timer has a precision of 1 ms. No bound on a single
+        # event: a handler that runs late on a loaded machine ages that one event (measured up to 84 ms on Linux and 1 s on
+        # Windows, the birth staying on the plan within 2 ms), which says nothing of when it was born; how faithful the birth is
+        # to the plan is measured on event.timeStamp elsewhere. A stream whose typical event is born at its dispatch, or far in
+        # the past, is the defect.
+        median = statistics.median(ages)
+        assert -(LATENCY_MAX_MS + TIMER_PRECISION_MS) <= median <= -(LATENCY_MIN_MS - TIMER_PRECISION_MS), (kind, median, rows)
