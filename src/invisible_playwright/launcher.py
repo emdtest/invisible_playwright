@@ -14,6 +14,7 @@ from invisible_core import SessionLocale, persona_cookies, prepare_session_geo, 
 from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
 from ._reaper import SessionToken, guard_for
+from ._juggler._reaped import final_reap
 
 
 # ⛔ `_NEWTAB_SETTLE = 0.4` AND ITS WRAPPER AROUND `ctx.new_page` USED TO BE
@@ -582,7 +583,7 @@ class InvisiblePlaywright(_session.CommonLaunch):
         # silence. Only processes positively identified as ours are touched.
         if self._session_token:
             try:
-                self._lifetime_guard.reap(self._session_token)
+                final_reap(self._lifetime_guard, self._session_token)
             except Exception:
                 pass
             self._session_token = SessionToken()

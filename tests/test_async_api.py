@@ -287,3 +287,42 @@ def test_a_cancelled_teardown_still_reaps_and_still_cancels():
     assert raised is not None, (
         "the cancellation was swallowed: the caller would believe a cancelled "
         "task finished normally")
+
+
+def test_the_async_teardown_leaves_the_final_reap_to_the_reaper_of_the_launch():
+    """With a reaper (the core's) the last reap of `_teardown` runs after it, not at once: at once it ended the sender of the
+    shutdown pings. Without one (every test above) it is immediate."""
+    import asyncio
+
+    from invisible_playwright import _reaper
+    from invisible_playwright._juggler import _reaped
+    from invisible_playwright.async_api import InvisiblePlaywright as Async
+
+    reaped = []
+
+    class Recording(_reaper.NullGuard):
+        def reap(self, token, *, timeout: float = 5.0) -> int:
+            reaped.append(token.value)
+            return 0
+
+    class Reaper:
+        steps = []
+        finished = False
+
+        def then(self, step):
+            self.steps.append(step)
+
+    session = Async(seed=7)
+    session._session_token = _reaper.SessionToken.mint()
+    session._lifetime_guard = Recording()
+    expected = session._session_token.value
+    reaper = Reaper()
+    _reaped._reapers[expected] = [reaper]
+    try:
+        asyncio.run(session._teardown())
+        assert reaped == [], "the teardown reaped at once and did not leave it to the reaper"
+        for step in reaper.steps:
+            step()
+        assert reaped == [expected]
+    finally:
+        _reaped._reapers.pop(expected, None)
