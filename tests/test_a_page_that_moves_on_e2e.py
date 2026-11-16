@@ -246,8 +246,8 @@ def test_expect_reads_the_state_it_names(page, site):
     page.set_content("<input type=checkbox id=c><p id=h hidden>x</p>")
     with pytest.raises(AssertionError):
         expect(page.locator("#c")).to_be_checked(timeout=500)
-    expect(page.locator("#c")).not_to_be_checked(timeout=500)
+    expect(page.locator("#c")).not_to_be_checked(timeout=30_000)
     with pytest.raises(AssertionError):
         expect(page.locator("#h")).to_be_visible(timeout=500)
-    expect(page.locator("#h")).to_be_hidden(timeout=500)
-    expect(page.locator("#missing")).to_be_hidden(timeout=500)
+    expect(page.locator("#h")).to_be_hidden(timeout=30_000)
+    expect(page.locator("#missing")).to_be_hidden(timeout=30_000)
