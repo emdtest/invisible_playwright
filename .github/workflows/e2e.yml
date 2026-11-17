@@ -111,6 +111,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
+          # the fontconfig e2e trace the opens of the browser: strace is not in the runner image (setsid is, util-linux)
+          sudo apt-get install -y strace
           sudo "$(which python)" -m playwright install-deps firefox
       - name: Fetch the published firefox binary
         run: echo "FF=$(python -m invisible_playwright fetch | tail -1)" >> "$GITHUB_ENV"
