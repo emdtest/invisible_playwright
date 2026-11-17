@@ -173,7 +173,7 @@ def test_the_diagnosis_has_the_status_of_the_document_and_at_most_forty_non_empt
     _package, data = _run(tmp_path, monkeypatch, mode, ["--diagnose"])
     diagnosis = data["cells"]["nomarker"]["diagnosis"]
     assert data["cells"]["nomarker"]["marker"] is False and data["cells"]["nomarker"]["status"] == "4xx"
-    assert diagnosis["http"] == 403 and diagnosis["http_status"] == 403 and diagnosis["title"] == "a title"
+    assert "http" not in diagnosis and diagnosis["http_status"] == 403 and diagnosis["title"] == "a title"
     assert len(diagnosis["ids"]) == 40 and all(diagnosis["ids"]) and diagnosis["ids"][:3] == ["a", "b", "id0"]
     assert "diagnosis" not in data["cells"]["fine"], "only a cell without its marker is diagnosed"
     _package, plain = _run(tmp_path, monkeypatch, mode)

@@ -128,7 +128,7 @@ def visit(page, state, site, canary_url, timeouts, errors, diagnose=False):
 
 def diagnosis(page, code) -> dict:
     """What the document is, for fixing a marker: its HTTP status, its title and the first 40 ids of its elements. Read, never judged."""
-    out = {"http": code, "http_status": code, "title": None, "ids": []}
+    out = {"http_status": code, "title": None, "ids": []}
     try:
         out["title"] = page.title()
     except Exception:
