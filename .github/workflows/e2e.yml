@@ -288,6 +288,18 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # What the tests that measure save for a reader (the boxes of tests/test_a_screenshot_draws_the_text_of_the_bundled_fonts_as_the_content_does_e2e.py:
+      # the two PNG files, the screenshot and a result.json per case), under RUNNER_TEMP/invpw-evidence, whether the run is green or red. Nothing there
+      # when no such test ran (an engine older than firefox-66 skips it), which is not a warning.
+      - name: Upload what the tests saved
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: invpw-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/invpw-evidence
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ``Control+A`` selects all in a field, on the PUBLISHED engine and the core this package pins, on Windows, where the keyboard of a real
   # user is: the shortcut letter used to reach the browser as Control+Shift+A (invisible-core 63.66.0 fixes it). The e2e is red on the
   # keyboard that held Shift for the capital A (tests/test_control_a_selects_all_in_a_field_e2e.py: 5 ways to press it x an <input> and a
@@ -402,4 +414,12 @@ jobs:
           name: e2e-junit-windows-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/e2e-junit-*.xml
           if-no-files-found: warn
+          retention-days: 14
+      - name: Upload what the tests saved
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: invpw-evidence-windows-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/invpw-evidence
+          if-no-files-found: ignore
           retention-days: 14
