@@ -72,10 +72,6 @@ PAGE = """<!doctype html><meta charset="utf-8">
 <canvas id="cv" width="%(w)d" height="%(h)d"></canvas>
 <script>
 const W = %(w)d, H = %(h)d;
-// The XML namespaces of the SVG image: names, not hosts, and nothing is fetched from them. They are written in two pieces because the
-// scan of the e2e files for real hosts (tests/_e2e_clocks.py) reads a whole URL as one.
-const NS = 'http' + '://www.w3.org/';
-const XHTML = NS + '1999/xhtml', SVG = NS + '2000/svg';
 // ONE string is the block, as HTML in the page and inside the SVG image. Everything that decides how the text is drawn is in it:
 // the family, the size, the line height, the languages (which choose the fallback font of the Han and Arabic runs) and the colours.
 function markup(family) {
@@ -90,13 +86,13 @@ function markup(family) {
   const style = 'box-sizing:border-box;width:' + W + 'px;height:' + H + 'px;padding:5px 8px;overflow:hidden;white-space:nowrap;'
     + 'margin:0;background:#fff;color:#000;font-family:\\'' + family + '\\';font-size:20px;line-height:34px;'
     + 'font-weight:400;font-style:normal;';
-  return '<div xmlns="' + XHTML + '" style="' + style + '">' + lines.join('') + '</div>';
+  return '<div xmlns="http://www.w3.org/1999/xhtml" style="' + style + '">' + lines.join('') + '</div>';
 }
 
 async function draw(family) {
   const html = markup(family);
   document.getElementById('dom').innerHTML = html;
-  const svg = '<svg xmlns="' + SVG + '" width="' + W + '" height="' + H + '">'
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">'
     + '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' + html + '</foreignObject></svg>';
   const img = new Image();
   await new Promise((resolve, reject) => {

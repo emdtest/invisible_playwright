@@ -167,6 +167,30 @@ def test_a_real_url_is_refused_and_a_local_one_is_not():
         assert rules_of(fake("def test_x(page):\n    page.goto(%r)\n" % url)) == [], url
 
 
+def _page_source(markup):
+    """The source of a module whose one constant is `markup`, as a page of an e2e test would hold it."""
+    return "PAGE = %r\n" % markup
+
+
+def test_an_xml_namespace_is_a_name_and_not_a_request():
+    """An SVG image or an XHTML island in a page is written with its namespace whole (xmlns="http://..."): nothing is fetched from it."""
+    svg, xhtml = "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xhtml"
+    for markup in ('<svg xmlns="%s" width="4"><foreignObject><div xmlns="%s"></div></foreignObject></svg>' % (svg, xhtml),
+                   "<svg xmlns='%s' xmlns:xlink='http://www.w3.org/1999/xlink'></svg>" % svg,
+                   'document.createElementNS("%s", "svg")' % svg,
+                   'el.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:x", "v")',
+                   'const s = "<svg xmlns=\\"%s\\"></svg>"' % svg):
+        assert rules_of(fake(_page_source(markup))) == [], markup
+
+
+def test_a_request_to_the_host_of_a_namespace_is_still_a_request():
+    """What makes a URL a name is where it stands (the value of an xmlns attribute, the argument of a namespace call), never the host it names."""
+    for markup in ('<a href="http://www.w3.org/">x</a>', '<img src="http://www.w3.org/2000/svg">', 'fetch("https://example.com/x")',
+                   '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.com/a.png"/></svg>'):
+        assert rules_of(fake(_page_source(markup))) == ["net"], markup
+    assert rules_of(fake("def test_x(page):\n    page.goto('http://www.w3.org/1999/xhtml')\n")) == ["net"]
+
+
 def test_a_real_url_is_accepted_in_the_files_of_the_round_after_a_publication():
     source = fake("def test_x(page):\n    page.goto('https://example.com/')\n")
     assert rules_of(source, "test_release_e2e.py") == [] and rules_of(source, "test_upgrade_e2e.py") == []

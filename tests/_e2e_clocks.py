@@ -66,6 +66,12 @@ _PROCESS_WORDS = re.compile(r"(pids?|processes|children|procs|content_processes)
 _SERVER_BASE = re.compile(r"(Handler|Server|Protocol)$")
 _TIMER = re.compile(r"\bset(?:Timeout|Interval)\(")
 _URL = re.compile(r"https?://([^\s/:'\"<>)\\]*)(?::[^\s/'\"<>)\\]*)?")
+#: What stands right before a URL that is a NAME and not an address: the value of an ``xmlns`` / ``xmlns:p`` attribute, or the namespace argument of a DOM
+#: call that takes one (``createElementNS("...", "svg")``). An XML namespace is an identifier that nothing fetches; a page that writes one in its markup
+#: (an SVG image, an XHTML island in a ``foreignObject``) makes no request. It is recognised by where it stands, never by which host it names, so a
+#: request to the same host (``href``, ``src``, ``goto``, ``fetch``) is still a request.
+_NAMESPACE_OF = re.compile(r"(?:\bxmlns(?::[\w.-]+)?\s*=\s*|\b(?:createElementNS|createAttributeNS|createDocument|setAttributeNS|getAttributeNS"
+                           r"|hasAttributeNS|removeAttributeNS|getElementsByTagNameNS)\(\s*)\\?[\"']$")
 _SAFE_HOST = re.compile(r"(^|\.)(test|invalid|localhost|example|local)$|^localhost$")
 #: The shortest deadline an e2e test may give to a wait for something that must happen, in seconds.
 MIN_DEADLINE_S = 30
@@ -390,7 +396,7 @@ class _Reader(ast.NodeVisitor):
             self.add("js-timer", node, found.group(0), line=node.lineno + text.count("\n", 0, found.start()))
         if not self.post:
             for found in _URL.finditer(text):
-                if _host_is_real(found.group(1)):
+                if _host_is_real(found.group(1)) and not _NAMESPACE_OF.search(text[max(0, found.start() - 48):found.start()]):
                     self.add("net", node, found.group(0), line=node.lineno + text.count("\n", 0, found.start()))
         if re.fullmatch(r"[\w.-]*port", text) is not None:
             pass

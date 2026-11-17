@@ -1,3 +1,0 @@
-[
-  {"id": "screenshot-bundled-font-outlines", "error": "page.screenshot draws the text of the bundled fonts with the outlines of DejaVu Sans on Linux: the parent rebuilds the font from its path through fontconfig, which does not know the folder of the bundle, and keeps the glyph numbers of the bundle with the outlines of another font", "test": "tests/test_a_screenshot_draws_the_text_of_the_bundled_fonts_as_the_content_does_e2e.py", "engine": "firefox-66", "fix": "engine firefox-66 (the commit of the series is added here when it lands)"}
-]
