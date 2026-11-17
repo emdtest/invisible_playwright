@@ -1,0 +1,15 @@
+{
+  "description": "The pages the real-sites round visits with one browser at a time (scripts/run_real_sites.py), judged by scripts/judge_real_sites.py: the published wrapper against stock Firefox driven by stock Playwright, on the same runner. Only URL, marker and class are kept here.",
+  "fields": {
+    "min_informative": "Integer, at the top level. The fewest cells that must carry information (stock good in every run) for the round to count as having measured. Fixed after the admission of the list: the number of sites that are good 5 of 5 for stock, minus 3. Below it the job is red, with the message that the round did not measure.",
+    "classes": "The kinds of page a site may be.",
+    "sites": "The list. Empty until a list is admitted.",
+    "id": "Per site. A short unique name made of lowercase letters, digits and hyphens. It keys the cells of both browsers.",
+    "url": "Per site. The page to open, https, without a login. The document is the page the status is read from.",
+    "marker": "Per site. A CSS selector that matches something only when the real page arrived (not an error page, not a block page, not a consent wall).",
+    "class": "Per site. One of the classes: calma (a quiet page), giornale (a newspaper full of advertising), negozio (a shop), applicazione (a single-page application or a search), protetta (a page behind protection)."
+  },
+  "classes": ["calma", "giornale", "negozio", "applicazione", "protetta"],
+  "min_informative": 0,
+  "sites": []
+}
