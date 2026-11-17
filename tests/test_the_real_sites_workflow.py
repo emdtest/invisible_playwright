@@ -7,6 +7,7 @@
 * a pull request that touches the list runs the admission AND the round: the round does not wait on the admission and is not skipped by it.
 """
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -70,3 +71,74 @@ def test_a_pull_request_that_touches_the_list_runs_the_admission_and_the_round()
     assert re.search(r"(?m)^    if: needs\.plan\.outputs\.admission == 'true'$", jobs["admit"])
     assert not re.search(r"(?m)^    if:.*admission", jobs["round"]), "the round is not skipped by the admission"
     assert "needs: plan" in jobs["round"] and "outputs.mode" not in _code(jobs["round"])
+
+
+# --- the admission is decided per push -----------------------------------------------------------------------------------------------------
+# The plan step holds the decision as Python in a heredoc; the tests run that very code with a fake `gh`, so what is asserted is what the workflow does.
+LIST = "tests/realsites/sites.json"
+ZEROS = "0" * 40
+
+
+def _decide():
+    plan = next(s for s in _steps() if _first_line(s) == "id: plan")
+    lines = plan.splitlines()
+    start = next((i for i, line in enumerate(lines) if "<<'PY'" in line), None)
+    assert start is not None, "the plan step holds no Python that decides the admission"
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "PY")
+    namespace = {"__name__": "plan"}
+    exec(textwrap.dedent("\n".join(lines[start + 1:end])), namespace)    # defines `decide`; its main part does not run on import
+    return namespace["decide"]
+
+
+class _Gh:
+    """A fake `gh api`: answers each endpoint from a table, or fails like a call that could not be made."""
+
+    def __init__(self, answers):
+        self.answers, self.asked = answers, []
+
+    def __call__(self, endpoint, jq):
+        self.asked.append(endpoint)
+        answer = self.answers.get(endpoint)
+        if answer is None:
+            raise RuntimeError("gh api %s: not found" % endpoint)
+        return answer
+
+
+def _plan(action, gh, before="b" * 40, head="c" * 40, event="pull_request"):
+    return _decide()(event, action, before, head, "o/r", "7", gh)
+
+
+def test_a_push_that_does_not_change_the_list_does_no_admission():
+    gh = _Gh({"repos/o/r/compare/%s...%s" % ("b" * 40, "c" * 40): ["tests/test_x.py", "scripts/run_real_sites.py"]})
+    assert _plan("synchronize", gh) is False
+    assert gh.asked == ["repos/o/r/compare/%s...%s" % ("b" * 40, "c" * 40)], "a push is compared with the head it replaced, not with the base of the pull request"
+
+
+def test_a_push_that_changes_the_list_does_the_admission():
+    gh = _Gh({"repos/o/r/compare/%s...%s" % ("b" * 40, "c" * 40): ["tests/test_x.py", LIST]})
+    assert _plan("synchronize", gh) is True
+
+
+@pytest.mark.parametrize("before", [ZEROS, "", "d" * 40], ids=["all zeros", "missing", "a commit the compare does not know"])
+def test_a_compare_that_cannot_be_made_does_the_admission(before):
+    gh = _Gh({"repos/o/r/compare/%s...%s" % ("b" * 40, "c" * 40): ["tests/test_x.py"]})   # nothing about `before`: the call fails
+    assert _plan("synchronize", gh, before=before) is True, "in doubt, measure"
+    assert _plan("synchronize", _Gh({}), head="") is True
+
+
+@pytest.mark.parametrize("action", ["opened", "reopened"])
+def test_a_pull_request_that_is_opened_is_judged_on_all_its_files(action):
+    assert _plan(action, _Gh({"repos/o/r/pulls/7/files": ["a.py", LIST]})) is True
+    assert _plan(action, _Gh({"repos/o/r/pulls/7/files": ["a.py"]})) is False
+    assert _plan(action, _Gh({})) is True, "the list of the files cannot be read: in doubt, measure"
+
+
+def test_an_event_that_is_not_a_pull_request_does_no_admission():
+    for event in ("push", "workflow_dispatch", "workflow_run"):
+        assert _plan("", _Gh({}), event=event) is False
+
+
+def test_the_plan_gives_the_decision_what_the_event_says():
+    plan = _code(next(s for s in _steps() if _first_line(s) == "id: plan"))
+    for name, expression in (("ACTION", "github.event.action"), ("BEFORE", "github.event.before"), ("HEAD_SHA", "github.event.pull_request.head.sha")):
+        assert "%s: ${{ %s }}" % (name, expression) in plan, name

@@ -18,7 +18,11 @@
 # VERSION. After a publication the version is the tag of the publish run (`head_branch` without its `v`); a run that is not of a `v*` tag makes the plan red. The other
 # events read the version the index serves now.
 #
-# ADMISSION. A pull request that touches tests/realsites/sites.json runs the admission AND the round (14 jobs: the plan, 2 of the round, 10 passes of the admission and
+# WHY PER PUSH. The admission judges a list when the list changes; the round measures at every push. A push that does not touch tests/realsites/sites.json does not run the
+# admission again, or every push of the pull request would resample the real sites and could go red for a reason that is nobody's change. The plan decides it per push:
+# a push is compared with the head it replaced; if that compare cannot be made (a forced push, no `before`, an API error) the admission runs, in doubt measure.
+#
+# ADMISSION. A push to a pull request that changes tests/realsites/sites.json runs the admission AND the round (14 jobs: the plan, 2 of the round, 10 passes of the admission and
 # its report). The admission is stock alone, five passes per site and per system (a job per pass, so that a list of thirty sites stays inside the limit of a job). It
 # decides: its report says, per site, keep or drop with the reason (at most 20 kept; blocked five of five is kept only in the class protetta, at most 4, as data; an
 # outcome that is not the same five of five is dropped) and the `min_informative` to write (the kept sites that are good five of five, minus 3; the lowest of the two
@@ -81,15 +85,48 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          ACTION: ${{ github.event.action }}
+          BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          admission=false
-          if [ "$EVENT" = pull_request ]; then
-            touched=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename' | grep -cx 'tests/realsites/sites.json' || true)
-            if [ "$touched" != 0 ]; then admission=true; fi
-          fi
+          admission=$(python3 - <<'PY'
+          import os
+          import subprocess
+
+          LIST = "tests/realsites/sites.json"
+          ZEROS = "0" * 40
+
+
+          def gh_files(endpoint, jq):
+              done = subprocess.run(["gh", "api", endpoint, "--paginate", "--jq", jq], capture_output=True, text=True, check=True)
+              return done.stdout.split()
+
+
+          def decide(event, action, before, head, repo, pr, files_of):
+              """Does this run admit the list? Only when this push changes it. A push (synchronize) is compared with the head it replaced; a pull request that is
+              opened or reopened is judged on all its files. A compare that cannot be made (a forced push, no `before`, an API error) runs the admission: in doubt, measure."""
+              if event != "pull_request":
+                  return False
+              if action == "synchronize":
+                  if not before or before == ZEROS or not head:
+                      return True
+                  endpoint, jq = "repos/%s/compare/%s...%s" % (repo, before, head), ".files[].filename"
+              else:
+                  endpoint, jq = "repos/%s/pulls/%s/files" % (repo, pr), ".[].filename"
+              try:
+                  return LIST in files_of(endpoint, jq)
+              except Exception:
+                  return True
+
+
+          if __name__ == "__main__":
+              e = os.environ
+              print("true" if decide(e["EVENT"], e.get("ACTION", ""), e.get("BEFORE", ""), e.get("HEAD_SHA", ""), e["REPO"], e.get("PR", ""), gh_files) else "false")
+          PY
+          )
           if [ "$EVENT" = workflow_run ]; then
             case "$HEAD_BRANCH" in
               v*)
