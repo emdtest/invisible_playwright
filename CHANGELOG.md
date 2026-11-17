@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-17
+
+### Engine firefox-66
+- A screenshot on Linux draws text in the fonts the page used. The browser's main process rebuilds each font of a screenshot from its
+  file and asks fontconfig to confirm that file; it now shows the bundled fonts to fontconfig before it builds its font list, so the file
+  is known and kept instead of being replaced by a fallback font (screen and canvas were already right; only screenshots were wrong).
+- A face of a font collection (`.ttc`) keeps its own index when the main process rebuilds it, so it is no longer drawn as another face of
+  the same file (Cambria Math, MS PGothic and NSimSun came out as Cambria, MS Gothic and SimSun). This is Mozilla's fix of bug 2077661,
+  carried as Mozilla wrote it until a Firefox release ships it.
+- Windows was not affected.
+
+### Changed
+- Pins invisible-core 66.75.0 and with it the engine firefox-66.
+
+### Added
+- A test that draws text in each bundled family the identity declares (accents, a typographic apostrophe, Chinese, Japanese, Arabic,
+  Russian, and two faces that are not the first of their collection) and compares the screenshot, byte for byte, with the same text drawn
+  by the page itself into a canvas, on Linux and on Windows.
+- A Linux test that a second launch reads the bundle from fontconfig's cache and does not scan the folder again, measured under strace,
+  with a test of the strace stand-in itself.
+
 ## [0.53.1] - 2026-11-16
 
 0.53.0 was tagged but never published; its changes ship in 0.53.1. One of its tests read the page's address too early when the first of
