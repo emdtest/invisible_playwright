@@ -147,7 +147,9 @@ def quiet_problem(stamps: Iterable[Tuple[str, float, Optional[float]]], returned
     after ``sent`` whatever the load, and one that ignores a request of a frame returns sooner. A late request that has
     not even arrived is no reason to complain when the network really was quiet before ``returned``; a request not yet
     sent at ``returned``, or an end too near, is."""
-    stamps = list(stamps)
+    # a request that arrived after the return was not in flight at the return, and is no complaint (on a slow machine it can
+    # arrive between the return and the read of the stamps)
+    stamps = [stamp for stamp in stamps if stamp[1] <= returned]
     in_flight = [path for path, _arrival, sent in stamps if sent is None or sent > returned]
     if in_flight:
         return "networkidle came while %s was in flight" % in_flight

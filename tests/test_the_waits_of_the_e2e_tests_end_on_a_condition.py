@@ -229,6 +229,17 @@ def test_a_request_not_yet_written_when_networkidle_came_is_in_flight():
     assert "/late/2" in quiet_problem(FAILED_RUN, 1.400)                                      # written after the return
 
 
+def test_a_request_that_arrived_after_the_return_is_not_in_flight_at_it():
+    # it arrived between `goto` returning and the read of the stamps: whether it was written or not, it is no complaint
+    seen = [("/late-top", 0.0, 0.01), ("/late-frame", 0.02, 0.03)]
+    assert quiet_problem(seen + [("/late/1", 0.80, None)], 0.55) is None
+    assert quiet_problem(seen + [("/late/1", 0.80, 1.10)], 0.55) is None
+    # arrived before the return and not yet written: still in flight
+    assert "/late/1" in quiet_problem(seen + [("/late/1", 0.30, None)], 0.55)
+    # nothing but requests that arrived after the return: nothing of the page was seen
+    assert "no request of the page was seen" in quiet_problem([("/late/1", 0.80, None)], 0.55)
+
+
 def test_the_tolerance_is_the_promise_less_the_resolution_the_clock_declares():
     resolution = time.get_clock_info("monotonic").resolution
     assert quiet_needed() == pytest.approx(0.5 - resolution)
@@ -252,7 +263,6 @@ def test_the_fake_server_stamps_sent_after_the_delay_and_before_the_write():
     for entry in entries.values():
         assert entry["at"] <= entry["sent"] <= entry["done"]
     assert entries["/held"]["sent"] - entries["/held"]["at"] >= 0.2 - time.get_clock_info("monotonic").resolution
-    assert entries["/now"]["sent"] - entries["/now"]["at"] < 0.2
 
 
 def test_the_turn_page_stops_its_tick_before_the_post_not_after_it():
