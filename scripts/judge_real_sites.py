@@ -13,13 +13,15 @@ It is GOOD when the load is ok, networkidle is ok, the status is 2xx, the marker
 
 The rule, per site, over the runs that are available for that site:
 
-* RED: stock is good in every run and ours is not good in at least two of three (``min(2, runs of ours)``: with the three runs the round supplies, two);
+* RED: stock is good in all three runs and ours is not good in at least two of the three;
+* INCOMPLETE: a cell that differs in the first pass (one browser good, the other not) must have three runs per browser; without them it is not a red cell but a
+  problem, "giro incompleto" (the job is red, the round's fault);
 * NO INFORMATION: stock is not good in every run (a site that blocks, has fallen or has changed). Never red. The outcome of ours is still reported, as data;
-* the job is RED when a cell is red, when a site of the list was not visited by both browsers, or when fewer cells than ``min_informative`` carry information
-  ("il giro non ha misurato": the round is broken, not the wrapper).
+* the job is RED when a cell is red or incomplete, when a site of the list was not visited by both browsers, when the list has no sites, when ``min_informative``
+  is below 1, or when fewer cells than ``min_informative`` carry information ("il giro non ha misurato": the round is broken, not the wrapper; an empty round is
+  never green).
 
-THE RUNS. ``judge(stock_runs, ours_runs, sites, min_informative)`` takes lists of runs; a run is the dict ``{site id: cell}`` of one pass. "3 of 3" is not a
-constant: it is the runs available for the site. The workflow supplies, per browser, the first pass over the whole list (``<browser>-1.json``) and, only for the
+THE RUNS. ``judge(stock_runs, ours_runs, sites, min_informative)`` takes lists of runs; a run is the dict ``{site id: cell}`` of one pass. The workflow supplies, per browser, the first pass over the whole list (``<browser>-1.json``) and, only for the
 sites whose first-pass cells differ (``differing``: one browser good and the other not), two more passes of those sites alone, in the order stock, ours, stock,
 ours (``<browser>-2.json``, ``<browser>-3.json``). A site is "visited" when it is in the FIRST pass of each browser; a site absent from a later pass is only a
 site that did not differ. A cell that did not differ has one run each: good and good is green, and bad and bad is no information.
@@ -29,6 +31,7 @@ The function is pure (no file, no clock, no network): ``main`` reads the files a
     judge_real_sites.py judge     --sites tests/realsites/sites.json --stock FILE... --ours FILE... [--summary summary.md] [--result result.json]
     judge_real_sites.py differing --sites tests/realsites/sites.json --stock FILE --ours FILE            (ids of the cells that differ, one comma-joined line)
     judge_real_sites.py admit     --sites tests/realsites/sites.json --os LABEL FILE... [--os LABEL FILE...] [--summary admission.md]
+        exit 1 when the file holds a site the admission would drop, or its min_informative is 0 or above the computed one; 0 for an empty list
 """
 from __future__ import annotations
 
@@ -43,14 +46,16 @@ from pathlib import Path
 GOOD = {"load": "ok", "networkidle": "ok", "status": "2xx", "marker": True, "canary": "ok"}
 FIELDS = tuple(GOOD)
 CLASSES = ("calma", "giornale", "negozio", "applicazione", "protetta")
-#: The runs of ours that must be not good, at least, for a red cell (the "2" of "at least 2 of 3"), never more than the runs there are.
+#: A cell that differs in the first pass has this many runs of each browser; without them the round is incomplete (its fault, not a red cell).
+RUNS_OF_A_DIFFERING_CELL = 3
+#: Red: stock good in every one of its three runs and ours not good in at least this many of its three.
 BAD_RUNS_FOR_RED = 2
 #: The admission keeps at most this many sites, of which at most MAX_PROTECTED are of the class PROTECTED (kept as data when stock is blocked there).
 MAX_KEPT = 20
 MAX_PROTECTED = 4
 PROTECTED = "protetta"
 NOT_MEASURED = "il giro non ha misurato"
-STATE_LABEL = {"red": "red", "green": "green", "no_information": "no information", "missing": "missing"}
+STATE_LABEL = {"red": "red", "green": "green", "no_information": "no information", "missing": "missing", "incomplete": "incomplete"}
 SITE_ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -97,8 +102,8 @@ def _visited(runs, site_id) -> bool:
 
 def judge(stock_runs, ours_runs, sites, min_informative) -> Judgement:
     """The verdict, the table and the exit code of one job. Pure: it reads only its arguments and changes none of them."""
-    if not isinstance(min_informative, int) or isinstance(min_informative, bool) or min_informative < 0:
-        raise ValueError("min_informative is an integer of 0 or more, not %r" % (min_informative,))
+    if not isinstance(min_informative, int) or isinstance(min_informative, bool):
+        raise ValueError("min_informative is an integer, not %r" % (min_informative,))
     table, problems = [], []
     informative = red = ours_good_stock_not = 0
     for site in sites:
@@ -110,6 +115,12 @@ def judge(stock_runs, ours_runs, sites, min_informative) -> Judgement:
             problems += ["%s was not visited by %s" % (site_id, name) for name in missing]
             table.append({**base, "state": "missing", "stock": stock, "ours": ours})
             continue
+        differs = is_good(stock_runs[0][site_id]) != is_good(ours_runs[0][site_id])
+        if differs and min(stock["runs"], ours["runs"]) < RUNS_OF_A_DIFFERING_CELL:
+            problems.append("giro incompleto: %s differs in the first pass and has %d runs of stock and %d of ours, %d each are needed"
+                            % (site_id, stock["runs"], ours["runs"], RUNS_OF_A_DIFFERING_CELL))
+            table.append({**base, "state": "incomplete", "stock": stock, "ours": ours})
+            continue
         if stock["good"] != stock["runs"]:
             state = "no_information"
             if ours["good"] == ours["runs"]:
@@ -117,7 +128,7 @@ def judge(stock_runs, ours_runs, sites, min_informative) -> Judgement:
         else:
             informative += 1
             not_good = ours["runs"] - ours["good"]
-            if not_good >= min(BAD_RUNS_FOR_RED, ours["runs"]):
+            if not_good >= BAD_RUNS_FOR_RED:
                 state = "red"
                 red += 1
                 problems.append("%s is red: stock was good in %d of %d runs and ours in %d of %d (%s)"
@@ -125,7 +136,11 @@ def judge(stock_runs, ours_runs, sites, min_informative) -> Judgement:
             else:
                 state = "green"
         table.append({**base, "state": state, "stock": stock, "ours": ours})
-    if informative < min_informative:
+    if not sites:
+        problems.append("%s: the list has no sites" % NOT_MEASURED)
+    elif min_informative < 1:
+        problems.append("%s: min_informative is %d, the minimum of a list that measures is 1" % (NOT_MEASURED, min_informative))
+    elif informative < min_informative:
         problems.append("%s: %d cells with information, the minimum is %d" % (NOT_MEASURED, informative, min_informative))
     code = 1 if problems else 0
     return Judgement("red" if code else "green", code, table, informative, red, ours_good_stock_not, problems)
@@ -197,6 +212,20 @@ def admission(runs_by_os, sites, expected_runs=5) -> dict:
     return report
 
 
+def admission_problems(report, sites, min_informative) -> list:
+    """What makes the admission red: a site of the file that the admission would drop, a pass that is missing, a ``min_informative`` of 0 or above the one the
+    admission computes (lower is fine, from 1). An empty list is not asked anything: there is nothing to admit."""
+    if not sites:
+        return []
+    out = list(report["problems"])
+    out += ["%s: the admission would drop it (%s)" % (d["id"], d["reason"]) for d in report["decisions"] if d["decision"] == "drop"]
+    if min_informative < 1:
+        out.append("min_informative is %d: write %d at most, and at least 1" % (min_informative, report["min_informative"]))
+    elif min_informative > report["min_informative"]:
+        out.append("min_informative is %d, above the %d the admission computes" % (min_informative, report["min_informative"]))
+    return out
+
+
 def validate_sites(sites) -> list:
     """The problems of a list: every site has an id (unique, lowercase letters, digits and hyphens), an https url, a marker and one of the five classes."""
     if not isinstance(sites, list):
@@ -244,7 +273,7 @@ def render_markdown(result: Judgement) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_admission(report: dict) -> str:
+def render_admission(report: dict, verdict_problems=()) -> str:
     labels = [k for k in report if k not in ("problems", "min_informative", "decisions", "kept")]
     lines = ["## Admission of the list: stock, same outcome in every pass", "",
              "- sites kept: %d of %d" % (len(report.get("kept", [])), len(report.get("decisions", []))),
@@ -264,6 +293,8 @@ def render_admission(report: dict) -> str:
                     lines.append("- %s, %s: %s" % (label, r["id"], r["why"]))
     if report["problems"]:
         lines += ["", "### Problems", ""] + ["- " + p for p in report["problems"]]
+    lines += ["", "**Verdict: %s**" % ("red" if verdict_problems else "green")]
+    lines += ["- " + p for p in verdict_problems]
     return "\n".join(lines) + "\n"
 
 
@@ -318,11 +349,13 @@ def main(argv=None) -> int:
         print(",".join(differing_sites(_cells_of(args.stock), _cells_of(args.ours), sites)))
         return 0
     if args.command == "admit":
-        text = render_admission(admission({group[0]: [_cells_of(f) for f in group[1:]] for group in args.os}, sites, args.expected_runs))
+        report = admission({group[0]: [_cells_of(f) for f in group[1:]] for group in args.os}, sites, args.expected_runs)
+        problems = admission_problems(report, sites, data.get("min_informative", 0))
+        text = render_admission(report, problems)
         if args.summary:
             _write(args.summary, text)
         print(text)
-        return 0
+        return 1 if problems else 0
     result = judge([_cells_of(f) for f in args.stock], [_cells_of(f) for f in args.ours], sites, data.get("min_informative", 0))
     text = render_markdown(result)
     if args.summary:

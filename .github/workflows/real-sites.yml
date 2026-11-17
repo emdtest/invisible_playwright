@@ -15,11 +15,17 @@
 #   * `push` to main and `pull_request` that touch the five files below: the round proves itself, on the packages published at that moment;
 #   * `workflow_dispatch`: to run a whole round again.
 #
-# ADMISSION. A pull request that touches tests/realsites/sites.json does not run the round: it runs stock alone, five passes per site and per system (a job per
-# pass, so that a list of thirty sites stays inside the limit of a job), and reports, per site, keep or drop with the reason (at most 20 kept; blocked five of five is
-# kept only in the class protetta, at most 4, as data; an outcome that is not the same five of five is dropped) and the `min_informative` to write (the kept sites that
-# are good five of five, minus 3; the lowest of the two systems). Where stock does not find the marker, its cell in the artifact also holds the status, the title
-# and the first 40 element ids of the page, to fix the marker in the same pull request; the judge ignores them.
+# VERSION. After a publication the version is the tag of the publish run (`head_branch` without its `v`); a run that is not of a `v*` tag makes the plan red. The other
+# events read the version the index serves now.
+#
+# ADMISSION. A pull request that touches tests/realsites/sites.json runs the admission AND the round (14 jobs: the plan, 2 of the round, 10 passes of the admission and
+# its report). The admission is stock alone, five passes per site and per system (a job per pass, so that a list of thirty sites stays inside the limit of a job). It
+# decides: its report says, per site, keep or drop with the reason (at most 20 kept; blocked five of five is kept only in the class protetta, at most 4, as data; an
+# outcome that is not the same five of five is dropped) and the `min_informative` to write (the kept sites that are good five of five, minus 3; the lowest of the two
+# systems), and it is red when the file holds a site it would drop or a `min_informative` of 0 or above the computed one. Where stock does not find the marker, its
+# cell in the artifact also holds the status, the title and the first 40 element ids of the page, to fix the marker in the same pull request; the judge ignores them.
+#
+# TOKEN. The token of the workflow is in the two steps that call `gh` (the plan and the report of the admission) and nowhere else: a step that opens real sites never sees it.
 #
 # No click and no handling of a consent wall anywhere: both browsers see what the page shows.
 
@@ -51,7 +57,6 @@ permissions:
   pull-requests: read
 
 env:
-  GITHUB_TOKEN: ${{ github.token }}
   PYTHONUTF8: "1"
 
 concurrency:
@@ -59,14 +64,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # What this run does (the round, or the admission of a list) and the version of the package it tests, read ONCE so that both systems test the same one.
+  # Whether this run also admits a list, and the version of the package it tests, read ONCE so that both systems test the same one.
   plan:
     name: plan
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      mode: ${{ steps.plan.outputs.mode }}
+      admission: ${{ steps.plan.outputs.admission }}
       version: ${{ steps.plan.outputs.version }}
     steps:
       - id: plan
@@ -75,22 +80,35 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mode=round
+          admission=false
           if [ "$EVENT" = pull_request ]; then
             touched=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename' | grep -cx 'tests/realsites/sites.json' || true)
-            if [ "$touched" != 0 ]; then mode=admission; fi
+            if [ "$touched" != 0 ]; then admission=true; fi
           fi
-          version=$(python3 -c 'import json, urllib.request; print(json.load(urllib.request.urlopen("https://pypi.org/pypi/invisible-playwright/json", timeout=60))["info"]["version"])')
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = workflow_run ]; then
+            case "$HEAD_BRANCH" in
+              v*)
+                version="${HEAD_BRANCH#v}"
+                ;;
+              *)
+                echo "::error::the publish run is of '$HEAD_BRANCH', not of a v* tag: the version of the package is not known"
+                exit 1
+                ;;
+            esac
+          else
+            version=$(python3 -c 'import json, urllib.request; print(json.load(urllib.request.urlopen("https://pypi.org/pypi/invisible-playwright/json", timeout=60))["info"]["version"])')
+          fi
+          echo "admission=$admission" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "mode: $mode, invisible-playwright $version"
+          echo "admission: $admission, invisible-playwright $version"
 
   round:
     name: round (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.mode == 'round'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -186,7 +204,7 @@ jobs:
   admit:
     name: admit (${{ matrix.os }}, pass ${{ matrix.repeat }})
     needs: plan
-    if: needs.plan.outputs.mode == 'admission'
+    if: needs.plan.outputs.admission == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -249,13 +267,18 @@ jobs:
 
       - name: Which sites are the same five of five, and the minimum to write
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'admit-*' --dir admit
+          set +e
           python scripts/judge_real_sites.py admit --sites tests/realsites/sites.json \
             --os linux admit/admit-Linux-*/stock-*.json --os windows admit/admit-Windows-*/stock-*.json \
             --summary admission.md
+          code=$?
           cat admission.md >> "$GITHUB_STEP_SUMMARY"
+          exit $code
 
       - name: The report
         if: always()

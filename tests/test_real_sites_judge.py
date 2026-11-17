@@ -4,9 +4,11 @@ The judge is a pure function of the cells the two browsers wrote. A cell is *goo
 and the canary page after it was quiet. The rule, per site, on the runs available for that site (the first pass, plus two more runs of each browser for the
 cells that differ):
 
-* RED: stock is good in every run and ours is not good in at least two of three;
+* RED: stock is good in all three runs and ours is not good in at least two of the three;
+* INCOMPLETE: a cell that differs in the first pass has three runs of each browser; without them it is a problem ("giro incompleto"), never a red cell;
 * NO INFORMATION: stock is not good in every run (a blocked, fallen or changed site): never red, ours is reported as data;
-* the job is red too when a site was not visited by both browsers, or when fewer cells than ``min_informative`` carry information ("il giro non ha misurato").
+* the job is red too when a site was not visited by both browsers, when the list has no sites or ``min_informative`` is below 1, or when fewer cells than
+  ``min_informative`` carry information ("il giro non ha misurato"); the admission is red when the file holds a site it would drop or a minimum it cannot back.
 
 The six cases of the design come first, each on known-bad input; the rest are the helpers around them. No time is read or asserted anywhere here.
 """
@@ -39,6 +41,14 @@ SITE = {"id": "site-a", "url": "https://a.example/", "marker": "#main", "class":
 OTHER = {"id": "site-b", "url": "https://b.example/", "marker": "#main", "class": "giornale"}
 
 
+ANCHOR = {"id": "anchor", "url": "https://anchor.example/", "marker": "#main", "class": "calma"}
+
+
+def anchored(runs):
+    """The runs with one more site, good for both browsers, so that a round whose cells all lack information still has one that measures."""
+    return [{**runs[0], "anchor": dict(GOOD)}] + list(runs[1:])
+
+
 def cell(**over):
     return {**GOOD, **over}
 
@@ -56,7 +66,7 @@ def row(result, site_id):
 def test_stock_good_three_of_three_and_ours_good_once_is_red():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(), cell(load="timeout"), cell(status="4xx"))
-    result = judge(stock, ours, [SITE], 0)
+    result = judge(stock, ours, [SITE], 1)
     assert row(result, "site-a")["state"] == "red"
     assert result.verdict == "red" and result.exit_code == 1
     assert result.red == 1
@@ -65,7 +75,7 @@ def test_stock_good_three_of_three_and_ours_good_once_is_red():
 def test_stock_good_three_of_three_and_ours_good_twice_is_green():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(), cell(), cell(networkidle="timeout"))
-    result = judge(stock, ours, [SITE], 0)
+    result = judge(stock, ours, [SITE], 1)
     assert row(result, "site-a")["state"] == "green"
     assert result.verdict == "green" and result.exit_code == 0
     assert result.red == 0 and result.informative == 1
@@ -79,16 +89,16 @@ def test_stock_good_three_of_three_and_ours_good_twice_is_green():
 ], ids=["blocked in all runs", "bad in the last run", "bad in the first run", "canary of stock fails"])
 def test_a_stock_that_is_not_good_gives_no_information_and_is_never_red(stock_cells):
     ours = runs_of("site-a", cell(load="error:NS_ERROR_NET_RESET"), cell(load="timeout"), cell(status="5xx"))
-    result = judge(runs_of("site-a", *stock_cells), ours, [SITE], 0)
+    result = judge(anchored(runs_of("site-a", *stock_cells)), anchored(ours), [ANCHOR, SITE], 1)
     assert row(result, "site-a")["state"] == "no_information"
-    assert result.red == 0 and result.informative == 0
+    assert result.red == 0 and result.informative == 1, "the anchor is the one cell with information"
     assert result.verdict == "green" and result.exit_code == 0
 
 
 def test_the_outcome_of_ours_is_reported_where_stock_gives_no_information():
     stock = runs_of("site-a", cell(status="4xx"), cell(status="4xx"), cell(status="4xx"))
     ours = runs_of("site-a", cell(), cell(), cell())
-    result = judge(stock, ours, [SITE], 0)
+    result = judge(anchored(stock), anchored(ours), [ANCHOR, SITE], 1)
     assert row(result, "site-a")["state"] == "no_information"
     assert row(result, "site-a")["ours"]["good"] == 3 and row(result, "site-a")["stock"]["good"] == 0
     assert result.ours_good_stock_not == 1
@@ -98,20 +108,20 @@ def test_the_outcome_of_ours_is_reported_where_stock_gives_no_information():
 def test_a_site_missing_from_one_of_the_two_passes_is_red():
     stock = [{"site-a": cell(), "site-b": cell()}]
     ours = [{"site-a": cell()}]
-    result = judge(stock, ours, [SITE, OTHER], 0)
+    result = judge(stock, ours, [SITE, OTHER], 1)
     assert row(result, "site-b")["state"] == "missing"
     assert result.verdict == "red" and result.exit_code == 1
     assert any("site-b" in p and "ours" in p for p in result.problems), result.problems
     # the same site missing from the pass of stock is just as red, and a pass that is not there at all misses every site
-    flipped = judge(ours, stock, [SITE, OTHER], 0)
+    flipped = judge(ours, stock, [SITE, OTHER], 1)
     assert flipped.verdict == "red" and any("site-b" in p and "stock" in p for p in flipped.problems)
-    nothing = judge([], stock, [SITE, OTHER], 0)
+    nothing = judge([], stock, [SITE, OTHER], 1)
     assert nothing.verdict == "red" and len(nothing.problems) >= 2
 
 
 def test_informative_cells_below_the_minimum_make_the_round_red_with_its_reason():
-    stock = [{"site-a": cell(), "site-b": cell(status="4xx")}]
-    ours = [{"site-a": cell(), "site-b": cell()}]
+    stock = [{"site-a": cell(), "site-b": cell(status="4xx")}] + [{"site-b": cell(status="4xx")}] * 2
+    ours = [{"site-a": cell(), "site-b": cell()}] + [{"site-b": cell()}] * 2
     result = judge(stock, ours, [SITE, OTHER], 2)
     assert result.informative == 1
     assert result.verdict == "red" and result.exit_code == 1
@@ -126,20 +136,17 @@ def test_a_canary_that_fails_only_for_ours_with_the_real_page_good_is_red():
     for r in ours:
         # the real page was good in every other respect
         assert {k: v for k, v in r["site-a"].items() if k != "canary"} == {k: v for k, v in GOOD.items() if k != "canary"}
-    result = judge(stock, ours, [SITE], 0)
+    result = judge(stock, ours, [SITE], 1)
     assert row(result, "site-a")["state"] == "red"
     assert "canary" in row(result, "site-a")["ours"]["why"]
     assert result.verdict == "red" and result.exit_code == 1
 
 
-# --- what "3 of 3" means, and the numbers -----------------------------------------------------------------------------------------------------
-def test_three_of_three_means_the_runs_available_for_that_site():
-    # a cell that did not differ in the first pass has one run each: good and good is green, and stock good with ours good is not asked again
+# --- the runs of a cell, and the numbers -----------------------------------------------------------------------------------------------------
+def test_a_cell_that_did_not_differ_has_one_run_each_and_the_later_runs_hold_only_the_differing_cells():
+    # good and good in the first pass is green and is not asked again
     result = judge([{"site-a": cell()}], [{"site-a": cell()}], [SITE], 1)
     assert row(result, "site-a")["state"] == "green" and row(result, "site-a")["stock"]["runs"] == 1
-    # one run of each where ours is bad: all the runs of ours are bad, so it is red (the round always supplies three for such a cell)
-    red = judge([{"site-a": cell()}], [{"site-a": cell(marker=False)}], [SITE], 0)
-    assert row(red, "site-a")["state"] == "red"
     # the later runs hold only the differing cells: a site absent from them is not a missing site
     stock = [{"site-a": cell(), "site-b": cell()}, {"site-a": cell()}, {"site-a": cell()}]
     ours = [{"site-a": cell(), "site-b": cell()}, {"site-a": cell()}, {"site-a": cell()}]
@@ -151,15 +158,17 @@ def test_the_judge_does_not_touch_what_it_is_given():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(load="timeout"), cell(load="timeout"), cell())
     before = copy.deepcopy((stock, ours, [SITE]))
-    judge(stock, ours, [SITE], 0)
+    judge(stock, ours, [SITE], 1)
     assert (stock, ours, [SITE]) == before
 
 
 def test_the_three_numbers_of_the_summary():
     sites = [SITE, OTHER, {"id": "site-c", "url": "https://c.example/", "marker": "h1", "class": "negozio"}]
-    stock = [{"site-a": cell(), "site-b": cell(), "site-c": cell(status="4xx")}, {"site-a": cell()}, {"site-a": cell()}]
-    ours = [{"site-a": cell(load="timeout"), "site-b": cell(), "site-c": cell()}, {"site-a": cell(status="5xx")}, {"site-a": cell(marker=False)}]
-    result = judge(stock, ours, sites, 0)
+    stock = [{"site-a": cell(), "site-b": cell(), "site-c": cell(status="4xx")}, {"site-a": cell(), "site-c": cell(status="4xx")},
+             {"site-a": cell(), "site-c": cell(status="4xx")}]
+    ours = [{"site-a": cell(load="timeout"), "site-b": cell(), "site-c": cell()}, {"site-a": cell(status="5xx"), "site-c": cell()},
+            {"site-a": cell(marker=False), "site-c": cell()}]
+    result = judge(stock, ours, sites, 1)
     assert (result.informative, result.red, result.ours_good_stock_not) == (2, 1, 1)
     text = judge_module.render_markdown(result)
     assert "site-a" in text and "site-b" in text and "site-c" in text
@@ -261,12 +270,91 @@ def test_what_a_pass_adds_to_diagnose_a_marker_does_not_enter_the_judgement():
     # the judge: the extra field changes nothing, a good cell stays good and a diagnosed one is the same as one without
     assert judge_module.is_good(cell(diagnosis={"status": 200, "title": "x", "ids": []}))
     stock = runs_of("site-a", cell(), cell(), cell())
-    with_diagnosis = judge(stock, runs_of("site-a", diagnosed, diagnosed, diagnosed), [SITE], 0)
-    without = judge(stock, runs_of("site-a", cell(marker=False), cell(marker=False), cell(marker=False)), [SITE], 0)
+    with_diagnosis = judge(stock, runs_of("site-a", diagnosed, diagnosed, diagnosed), [SITE], 1)
+    without = judge(stock, runs_of("site-a", cell(marker=False), cell(marker=False), cell(marker=False)), [SITE], 1)
     assert (with_diagnosis.verdict, with_diagnosis.table[0]["state"], with_diagnosis.table[0]["ours"]["why"]) ==            (without.verdict, without.table[0]["state"], without.table[0]["ours"]["why"])
     # the admission: five passes that differ only in the diagnosis are the same outcome
     runs = [{"site-a": cell(marker=False, diagnosis={"status": 403, "title": "t%d" % i, "ids": [str(i)]})} for i in range(5)]
     assert _decisions(judge_module.admission({"linux": runs}, [_site("site-a", "protetta")], expected_runs=5))["site-a"][0] == "keep"
+
+
+# --- an incomplete round is not a red cell, and an empty round did not measure ---------------------------------------------------------------
+def test_a_differing_cell_without_its_three_runs_is_an_incomplete_round_and_not_a_red_cell():
+    for runs in (1, 2):
+        stock = [{"site-a": cell(), "site-b": cell()}] + [{"site-a": cell()}] * (runs - 1)
+        ours = [{"site-a": cell(load="timeout"), "site-b": cell()}] + [{"site-a": cell(load="timeout")}] * (runs - 1)
+        result = judge(stock, ours, [SITE, OTHER], 1)
+        assert row(result, "site-a")["state"] == "incomplete", runs
+        assert result.red == 0, "the missing runs are the round's fault, not a cell that is red"
+        assert result.verdict == "red" and result.exit_code == 1
+        assert any("giro incompleto" in p and "site-a" in p for p in result.problems), result.problems
+    # a cell that differs the other way round (stock not good, ours good) is asked three times too
+    reverse = judge([{"site-a": cell(status="4xx"), "site-b": cell()}], [{"site-a": cell(), "site-b": cell()}], [SITE, OTHER], 1)
+    assert row(reverse, "site-a")["state"] == "incomplete" and reverse.verdict == "red"
+    # with its three runs the same cell is judged
+    full = judge(runs_of("site-a", cell(), cell(), cell()), runs_of("site-a", cell(load="timeout"), cell(load="timeout"), cell()), [SITE], 1)
+    assert row(full, "site-a")["state"] == "red" and not any("giro incompleto" in p for p in full.problems)
+
+
+def test_a_cell_that_did_not_differ_needs_no_more_runs():
+    result = judge([{"site-a": cell(), "site-b": cell(status="4xx")}], [{"site-a": cell(), "site-b": cell(load="timeout")}], [SITE, OTHER], 1)
+    assert [r["state"] for r in result.table] == ["green", "no_information"]
+    assert result.verdict == "green" and result.problems == []
+
+
+def test_a_round_with_no_sites_did_not_measure():
+    for stock, ours in (([{}], [{}]), ([], [])):
+        for minimum in (0, 1, 5):
+            result = judge(stock, ours, [], minimum)
+            assert result.verdict == "red" and result.exit_code == 1, minimum
+            assert any("il giro non ha misurato" in p for p in result.problems), result.problems
+
+
+def test_a_minimum_below_one_did_not_measure():
+    stock, ours = runs_of("site-a", cell(), cell(), cell()), runs_of("site-a", cell(), cell(), cell())
+    for minimum in (0, -1):
+        result = judge(stock, ours, [SITE], minimum)
+        assert result.verdict == "red" and result.exit_code == 1, minimum
+        assert any("il giro non ha misurato" in p and "minimum" in p for p in result.problems), result.problems
+    assert judge(stock, ours, [SITE], 1).verdict == "green"
+
+
+# --- the admission decides ----------------------------------------------------------------------------------------------------------------
+def _admit_files(tmp_path, sites, min_informative, cells_of_site):
+    """The file of the list and five passes of stock for each system, every pass with ``cells_of_site`` (site id -> cell)."""
+    sites_file = tmp_path / "sites.json"
+    sites_file.write_text(json.dumps({"min_informative": min_informative, "sites": sites}), encoding="utf-8")
+    groups = []
+    for label in ("linux", "windows"):
+        files = []
+        for n in range(1, 6):
+            path = tmp_path / ("%s-%d.json" % (label, n))
+            path.write_text(json.dumps({"browser": "stock", "cells": cells_of_site}), encoding="utf-8")
+            files.append(str(path))
+        groups += ["--os", label, *files]
+    return ["admit", "--sites", str(sites_file), *groups, "--summary", str(tmp_path / "admission.md")]
+
+
+def test_the_admission_is_red_when_the_file_holds_a_site_the_admission_would_drop(tmp_path):
+    sites = [_site("good-%d" % i) for i in range(5)] + [_site("blocked", "giornale")]
+    cells = {s["id"]: cell() for s in sites}
+    cells["blocked"] = cell(status="4xx")
+    assert judge_module.main(_admit_files(tmp_path, sites, 2, cells)) == 1
+    text = (tmp_path / "admission.md").read_text(encoding="utf-8")
+    assert "blocked" in text and "would drop" in text
+    # the list without that site, and with the minimum the admission computes, is green
+    assert judge_module.main(_admit_files(tmp_path, sites[:5], 2, {s["id"]: cell() for s in sites[:5]})) == 0
+
+
+@pytest.mark.parametrize("written, exit_code", [(0, 1), (3, 1), (9, 1), (2, 0), (1, 0)], ids=["zero", "above by one", "far above", "equal", "lower"])
+def test_the_admission_is_red_when_the_minimum_is_zero_or_above_the_computed_one(tmp_path, written, exit_code):
+    sites = [_site("good-%d" % i) for i in range(5)]       # 5 good five of five, minus 3: the admission computes 2
+    assert judge_module.main(_admit_files(tmp_path, sites, written, {s["id"]: cell() for s in sites})) == exit_code
+    assert "min_informative" in (tmp_path / "admission.md").read_text(encoding="utf-8")
+
+
+def test_the_admission_of_an_empty_list_is_green(tmp_path):
+    assert judge_module.main(_admit_files(tmp_path, [], 0, {})) == 0
 
 
 # --- the files ------------------------------------------------------------------------------------------------------------------------------
