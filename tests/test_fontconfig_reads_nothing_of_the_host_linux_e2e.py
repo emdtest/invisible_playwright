@@ -90,13 +90,18 @@ def _require_strace_can_trace(tmp: Path) -> None:
                     pytrace=False)
 
 
-def _stand_in(binary: str, tree: Path, log: Path, pidfile: Path) -> str:
+def _stand_in(binary: str, tree: Path, log: Path, pidfile: Path, syscalls: str = _SYSCALLS,
+              timestamps: bool = False) -> str:
     """A copy of the engine's directory made of links, whose executable runs
     the real one under strace, in a session of its own.
 
     The script writes its pid and execs ``setsid``: it is not a group leader,
     so setsid does not fork, the pid stays, and it is the id of a process
-    group that holds strace and everything it traces (``_kill_group``)."""
+    group that holds strace and everything it traces (``_kill_group``).
+
+    ``syscalls`` is what strace traces; ``timestamps`` adds ``-ttt`` (the epoch
+    seconds after each pid), which ``_LINE`` does not read: a caller that asks
+    for them strips them first (``test_the_parent_reads_the_bundle_from_fontconfig_s_cache_linux_e2e``)."""
     real = Path(os.path.realpath(binary))
     tree.mkdir()
     for entry in real.parent.iterdir():
@@ -107,8 +112,8 @@ def _stand_in(binary: str, tree: Path, log: Path, pidfile: Path) -> str:
         "#!/bin/sh\n"
         "echo $$ > %s\n"
         'exec %s %s %s -o %s -e trace=%s %s "$@"\n'
-        % (pidfile, shutil.which("setsid"), shutil.which("strace"), _strace_options(),
-           log, _SYSCALLS, real))
+        % (pidfile, shutil.which("setsid"), shutil.which("strace"),
+           _strace_options() + (" -ttt" if timestamps else ""), log, syscalls, real))
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return str(script)
 
@@ -120,10 +125,9 @@ _RESUMED = re.compile(r"^(\d+)\s+<\.\.\. (\w+) resumed>(.*)$")
 _RESULT = re.compile(r"=\s+(\d+)\s*$")
 
 
-def _host_lookups(log: Path, real_binary: str) -> dict:
-    """``{"parent"|"content"|"other": ["<syscall> <line>", ...]}`` for every
-    system call of the browser that names a host font path."""
-    lines = log.read_text(errors="replace").splitlines()
+def _roles(lines: list, real_binary: str):
+    """``(role, argv_of)`` for a strace log read as lines: ``role(pid)`` is ``"parent"``, ``"content"`` or ``"other"`` (walking up the
+    clones to the process that executed the engine), ``argv_of`` maps a pid to the arguments of the last execve of the engine it made."""
     parent_of = {}
     argv_of = {}
     for line in lines:
@@ -151,6 +155,15 @@ def _host_lookups(log: Path, real_binary: str) -> dict:
                 break
             pid = parent_of[pid]
         return "other"
+
+    return role, argv_of
+
+
+def _host_lookups(log: Path, real_binary: str) -> dict:
+    """``{"parent"|"content"|"other": ["<syscall> <line>", ...]}`` for every
+    system call of the browser that names a host font path."""
+    lines = log.read_text(errors="replace").splitlines()
+    role, _argv_of = _roles(lines, real_binary)
 
     paths = _host_font_paths()
     found = defaultdict(list)
