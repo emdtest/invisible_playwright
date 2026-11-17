@@ -61,14 +61,16 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from test_a_screenshot_draws_the_text_of_the_bundled_fonts_as_the_content_does_e2e import EVIDENCE_FOLDER, FAMILIES
 from test_fontconfig_reads_nothing_of_the_host_linux_e2e import (
-    _kill_group, _LINE, _require_strace_can_trace, _roles, _stand_in)
+    _detached, _group_members, _group_of, _kill_group, _LINE, _require_strace_can_trace, _roles, _stand_in, _wait_for_exit)
 
 pytestmark = [
     pytest.mark.e2e,
@@ -245,11 +247,56 @@ def _public(measure: dict) -> dict:
     return {k: v for k, v in measure.items() if not k.startswith("_")}
 
 
+@pytest.mark.timeout(120, method="thread")
+def test_the_stand_in_stays_in_the_engine_s_place_and_its_group_is_killed_whole(tmp_path):
+    """The tool, without a browser. A fake engine (a script that starts a child and waits for it) is launched through the stand-in
+    as the core launches the engine: the leader of a process group of its own (``_detached``). The process the launcher holds must
+    stay alive while the fake engine runs: with the stand-in that exec'd ``setsid``, setsid forked (its caller led a group), its
+    parent exited 0 at once, and the core saw the engine exit during startup (candidate 44161687675, job 134356188701). The group
+    the cleanup kills is the launcher's, it holds strace and the fake engine's child, and nothing of it is left afterwards."""
+    if shutil.which("strace") is None:
+        pytest.fail("needs strace (apt install strace): without it the stand-in cannot be tried", pytrace=False)
+    _require_strace_can_trace(tmp_path)
+    real = tmp_path / "real" / "firefox"
+    real.parent.mkdir()
+    child_file = tmp_path / "child.pid"
+    real.write_text("#!/bin/sh\nsleep 300 &\necho $! > %s\nwait\n" % child_file)
+    real.chmod(0o755)
+    log, pidfile = tmp_path / "strace.log", tmp_path / "stand-in.pid"
+    stand_in = _stand_in(str(real), tmp_path / "engine", log, pidfile)
+    proc = _detached([stand_in], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        end = time.monotonic() + 30
+        while time.monotonic() < end and not (child_file.exists() and child_file.read_text().strip()):
+            time.sleep(0.05)
+        started = child_file.exists() and child_file.read_text().strip() != ""
+        time.sleep(1.0)
+        exited_with = proc.poll()
+        pgid = _group_of(pidfile)
+        members = _group_members(pgid) if pgid is not None else []
+        comms = sorted(Path("/proc/%d/comm" % p).read_text().strip() for p in members if Path("/proc/%d/comm" % p).exists())
+        child = int(child_file.read_text()) if started else None
+        killed = _kill_group(pidfile)
+        proc.wait(timeout=30)
+        left = _wait_for_exit(pgid) if pgid is not None else []
+    finally:
+        _kill_group(pidfile)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=30)
+    assert started, "the fake engine did not start its child under the stand-in"
+    assert exited_with is None, ("the process the launcher holds exited (code %s) while the engine it stands for was running: the launcher "
+                                 "would see the engine gone" % exited_with)
+    assert pgid == proc.pid and pgid != os.getpgrp(), "the group is not the one the launcher gave (group %s, pid %d)" % (pgid, proc.pid)
+    assert "strace" in comms and child in members, "the group holds %s (%s), not strace and the child %s" % (members, comms, child)
+    assert killed == pgid and not left, "after the kill of group %s: killed %s, left %s" % (pgid, killed, left)
+
+
 @pytest.mark.timeout(900, method="thread")
 def test_the_warm_parent_reads_the_bundle_from_fontconfig_cache_and_does_not_scan_it(firefox_binary, engine_at_least, tmp_path, monkeypatch):
     engine_at_least("firefox-66")
-    if shutil.which("strace") is None or shutil.which("setsid") is None:
-        pytest.fail("needs strace and setsid (apt install strace util-linux): without them nothing is measured", pytrace=False)
+    if shutil.which("strace") is None:
+        pytest.fail("needs strace (apt install strace): without it nothing is measured", pytrace=False)
     _require_strace_can_trace(tmp_path)
 
     xdg = tmp_path / "xdg-cache"
