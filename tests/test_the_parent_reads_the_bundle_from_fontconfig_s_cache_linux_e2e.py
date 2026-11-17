@@ -25,12 +25,22 @@ between the start of the browser and the moment the wrapper has returned the lau
 is not yet called). The point is a position in the strace log (its size when the launch returns), not a time: the log is written line by
 line, and everything the parent did to build its font list is before it. The opens after it (the page with every family of the
 screenshot test, and the screenshot) are measured as well and written to the evidence, as ``after_startup``, but the assertion does not
-read them. A cold launch whose window holds no open of the bundle is a measurement that cannot see the scan: the test says so and stops,
-it does not pass.
+read them.
 
-The assertion, the only one that judges (the rest is the validity of the measurement): in the warm launch the parent opens, in that
-window, NO file of ``<GRE>/fonts`` that the cold launch opened in its window, and it opens a ``*.cache-*`` file under
-``$XDG_CACHE_HOME/fontconfig``. No threshold: a set that must be empty and a file that must be read.
+Why "all or none" and not "none that the cold one opened". Even on a warm cache the parent opens a few files of the bundle before the
+first page, to USE them (the face blob of a font of its own interface is opened and mapped); those files are also in the cold set, so a
+test that asks for an empty intersection would be red for a good engine. What a scan is, is different: fontconfig scans a folder as a
+whole (``FcDirCacheScan`` opens every file of it) or reads the cache of the folder and opens none for the scan. So the test asks about
+the whole folder, as the disk lists it (no number written by hand):
+
+  * the validity of the measurement: the cold parent opened EVERY font file of ``<GRE>/fonts`` in the window, and fontconfig wrote its
+    cache under ``$XDG_CACHE_HOME/fontconfig``; otherwise the window does not see the scan and the test says it cannot judge;
+  * the assertion, the only one that judges: in the same window the warm parent does NOT open every font file of the folder, and it
+    opens a ``*.cache-*`` file under ``$XDG_CACHE_HOME/fontconfig``.
+
+The files of the folder that are not fonts (a ``.list``, a README) are left out of the list, explicitly: a font is a file whose name ends
+in one of ``FONT_EXTENSIONS`` (what fontconfig reads through FreeType); the evidence names the files that were left out. The files the
+warm parent opened are in the evidence, by name. No threshold: a set that is not the whole folder, and a file that is read.
 
 Evidence, whatever the verdict: when ``RUNNER_TEMP`` is set the test writes ``result.json`` and, for each launch, the opens of the bundle
 by the parent with their time, under ``$RUNNER_TEMP/invpw-evidence/fontconfig-cache/``. For the cold and the warm launch (and for a
@@ -69,6 +79,10 @@ pytestmark = [
 TRACE = "execve,clone,clone3,fork,vfork,openat,openat2"
 
 SEED = 21
+
+#: What counts as a font of the bundle in the folder ``<GRE>/fonts``: the extensions of the files fontconfig reads through FreeType. Any
+#: other file of the folder (a ``.list``, a README) is not a font and is left out of the list, and the evidence says which ones.
+FONT_EXTENSIONS = (".ttf", ".ttc", ".otf", ".otc", ".pfb", ".pfa", ".pcf", ".pcf.gz", ".bdf", ".woff", ".woff2", ".pfr", ".fon", ".fnt")
 
 #: ``strace -f -ttt``: "PID EPOCH call(...". ``_LINE`` and ``_roles`` read "PID call(...", so the epoch is taken off first and kept apart.
 _STAMPED = re.compile(r"^(\d+)\s+(\d+\.\d+)\s+(.*)$")
@@ -169,6 +183,13 @@ def _fontconfig_cache(xdg: Path):
     return sorted(({"name": f.name, "bytes": f.stat().st_size} for f in folder.iterdir() if f.is_file()), key=lambda f: f["name"])
 
 
+def _the_folder(gre_fonts: str):
+    """``(fonts, left_out)``: the names of the files of the folder as the DISK lists them, split by ``FONT_EXTENSIONS``."""
+    names = sorted(e.name for e in os.scandir(gre_fonts) if e.is_file()) if os.path.isdir(gre_fonts) else []
+    fonts = [n for n in names if n.lower().endswith(FONT_EXTENSIONS)]
+    return fonts, [n for n in names if n not in fonts]
+
+
 def _launch(firefox_binary, work: Path, xdg: Path, extra_prefs=None):
     """One launch of the binary under strace, with ``XDG_CACHE_HOME`` = ``xdg`` in the environment of the test. Returns what the log and
     /proc say; the browser is gone when it returns."""
@@ -199,6 +220,8 @@ def _launch(firefox_binary, work: Path, xdg: Path, extra_prefs=None):
     under = sorted({gre_fonts, os.path.realpath(gre_fonts)})
     scan = _opens_of_the_parent(lines, times, role, 0, start, under)
     later = _opens_of_the_parent(lines, times, role, start, len(lines), under)
+    fonts, left_out = _the_folder(gre_fonts)
+    opened = sorted({os.path.basename(o["path"]) for o in scan if o["ok"]})
     cache_dir = str(xdg / "fontconfig")
     cache_reads = [o for o in _opens_of_the_parent(lines, times, role, 0, start, [cache_dir]) if ".cache-" in o["path"] and o["ok"]]
     return {
@@ -208,17 +231,18 @@ def _launch(firefox_binary, work: Path, xdg: Path, extra_prefs=None):
         "cache_files_read_at_startup": sorted({o["path"] for o in cache_reads}),
         "fontconfig_cache": _fontconfig_cache(xdg),
         "vmrss_kb": rss,
-        "_scan_files": {o["path"] for o in scan if o["ok"]},
+        "bundle_font_files": len(fonts),
+        "files_left_out_as_not_fonts": left_out,
+        "font_files_opened_at_startup": len([n for n in opened if n in fonts]),
+        "font_files_not_opened_at_startup": [n for n in fonts if n not in opened],
+        "files_opened_at_startup": opened,
         "_scan_opens": scan,
         "_later_opens": later,
-        "_bundle_files": len(os.listdir(gre_fonts)) if os.path.isdir(gre_fonts) else None,
     }
 
 
 def _public(measure: dict) -> dict:
-    out = {k: v for k, v in measure.items() if not k.startswith("_")}
-    out["bundle_files_in_the_folder"] = measure["_bundle_files"]
-    return out
+    return {k: v for k, v in measure.items() if not k.startswith("_")}
 
 
 @pytest.mark.timeout(900, method="thread")
@@ -245,18 +269,18 @@ def test_the_warm_parent_reads_the_bundle_from_fontconfig_cache_and_does_not_sca
     except Exception as err:  # evidence only: a launch that fails is written down, it does not change the verdict
         before = {"error": "%s: %s" % (type(err).__name__, str(err)[:600])}
 
-    reopened = sorted(warm["_scan_files"] & cold["_scan_files"])
     result = {
         "test": "the-parent-reads-the-bundle-from-fontconfig-cache",
         "platform": sys.platform,
         "seed": SEED,
         "xdg_cache_home": str(xdg),
-        "criterion": ("scan = the opens of a file of <GRE>/fonts by the PARENT before any page is opened (the strace log up to its size "
-                      "when the launch returned); the opens after it are drawing and are in after_startup"),
+        "criterion": ("window = what the PARENT opens before any page is opened (the strace log up to its size when the launch returned; "
+                      "the opens after it are drawing and are in after_startup). Valid: the cold parent opened every font file of "
+                      "<GRE>/fonts and fontconfig wrote its cache. Verdict: the warm parent does not open every font file of the folder "
+                      "and opens a *.cache-* file. Font files = the folder as the disk lists it, by FONT_EXTENSIONS"),
         "cold": _public(cold),
         "warm": _public(warm),
         "before_gfx_bundled_fonts_activate_0": _public(before) if "error" not in before else before,
-        "warm_reopened_what_cold_scanned": reopened,
     }
     where = _evidence_dir()
     if where is not None:
@@ -272,12 +296,14 @@ def test_the_warm_parent_reads_the_bundle_from_fontconfig_cache_and_does_not_sca
     assert cold_cache, (
         "the cold launch wrote nothing under XDG_CACHE_HOME=%s: either the variable did not reach the browser or fontconfig keeps no "
         "cache for the bundle; there is nothing for a warm launch to read" % xdg)
-    assert cold["_scan_files"], (
-        "the parent of the cold launch opened no file of <GRE>/fonts before a page was opened: the window does not see the scan "
-        "(after startup it opened %d); the test cannot judge" % cold["after_startup"]["opens"])
+    assert not cold["font_files_not_opened_at_startup"] and cold["bundle_font_files"], (
+        "the parent of the cold launch did not open every font file of <GRE>/fonts (%d of %d) before a page was opened: the window does "
+        "not see the scan; the test cannot judge. Not opened: %s"
+        % (cold["font_files_opened_at_startup"], cold["bundle_font_files"], cold["font_files_not_opened_at_startup"][:5]))
 
-    assert not reopened and warm["cache_files_read_at_startup"], (
+    scanned_again = not warm["font_files_not_opened_at_startup"]
+    assert not scanned_again and warm["cache_files_read_at_startup"], (
         "the warm parent %s. Cold: %s. Warm: %s. Cache under %s: cold %s, warm %s."
-        % ("opened %d of the %d files of <GRE>/fonts that the cold parent had scanned (first: %s)"
-           % (len(reopened), len(cold["_scan_files"]), reopened[:3]) if reopened else "read no *.cache-* file of fontconfig at its start",
+        % ("opened every one of the %d font files of <GRE>/fonts before a page: it scanned the folder again"
+           % warm["bundle_font_files"] if scanned_again else "read no *.cache-* file of fontconfig at its start",
            result["cold"]["startup"], result["warm"]["startup"], xdg / "fontconfig", cold_cache, warm["fontconfig_cache"]))
