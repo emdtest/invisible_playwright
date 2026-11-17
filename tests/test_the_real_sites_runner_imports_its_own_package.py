@@ -147,7 +147,7 @@ def _run(tmp_path, monkeypatch, mode, extra=()):
 
     monkeypatch.setattr(runner.metadata, "version", version)
     sites = tmp_path / "sites.json"
-    sites.write_text(json.dumps({"min_informative": 1, "sites": SITES}), encoding="utf-8")
+    sites.write_text(json.dumps({"sites": SITES}), encoding="utf-8")
     out = tmp_path / "cells.json"
     assert runner.main(["--browser", mode, "--sites", str(sites), "--out", str(out), *extra]) == 0
     return package, json.loads(out.read_text(encoding="utf-8"))

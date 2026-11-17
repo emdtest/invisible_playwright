@@ -23,11 +23,13 @@
 # a push is compared with the head it replaced; if that compare cannot be made (a forced push, no `before`, an API error) the admission runs, in doubt measure.
 #
 # ADMISSION. A push to a pull request that changes tests/realsites/sites.json runs the admission AND the round (14 jobs: the plan, 2 of the round, 10 passes of the admission and
-# its report). The admission is stock alone, five passes per site and per system (a job per pass, so that a list of thirty sites stays inside the limit of a job). It
-# decides: its report says, per site, keep or drop with the reason (at most 20 kept; blocked five of five is kept only in the class protetta, at most 4, as data; an
-# outcome that is not the same five of five is dropped) and the `min_informative` to write (the kept sites that are good five of five, minus 3; the lowest of the two
-# systems), and it is red when the file holds a site it would drop or a `min_informative` of 0 or above the computed one. Where stock does not find the marker, its
-# cell in the artifact also holds the status, the title and the first 40 element ids of the page, to fix the marker in the same pull request; the judge ignores them.
+# its report). The admission is stock alone, five passes per site and per system (a job per pass, so that a list of thirty sites stays inside the limit of a job). It is
+# red only for a defect of the list, never for the luck of one site: an invalid list (a `min_informative` in the file is one), a pass that is missing, a site never good in
+# any pass of a system that is not of the class protetta (a wrong marker, or a fixed block), more than 4 protetta, more than 20 sites. A site good in some passes stays,
+# and the report gives its count per system ("4 of 5 on linux"): every real site has a rare failure on the side of stock, five passes cannot tell it from instability,
+# and in the round it only removes information from that cell. The minimum of information is not sampled and is not in the file: the judge asks for half the sites,
+# rounded up. Where stock does not find the marker, its cell in the artifact also holds the status, the title and the first 40 element ids of the page, to fix the marker
+# in the same pull request; the judge ignores them.
 #
 # TOKEN. The token of the workflow is in three steps and nowhere else: the plan and the report of the admission (they call `gh`) and the install and fetch of the
 # round (the engine is downloaded from GitHub; that step launches no browser). A step that runs the passes never sees it.

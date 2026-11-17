@@ -1,16 +1,14 @@
 {
   "description": "The pages the real-sites round visits with one browser at a time (scripts/run_real_sites.py), judged by scripts/judge_real_sites.py: the published wrapper against stock Firefox driven by stock Playwright, on the same runner. Only URL, marker and class are kept here.",
   "fields": {
-    "min_informative": "Integer, at the top level. The fewest cells that must carry information (stock good in every run) for the round to count as having measured. Fixed after the admission of the list: the number of sites that are good 5 of 5 for stock, minus 3. Below it the job is red, with the message that the round did not measure.",
     "classes": "The kinds of page a site may be.",
-    "sites": "The list. The admission of a pull request that touches this file says which of its sites stay.",
+    "sites": "The list, at most 20 sites and at most 4 of the class protetta. The judge asks for information from half of them, rounded up (8 of 15): there is no minimum written in this file, and a file that has one is not a list.",
     "id": "Per site. A short unique name made of lowercase letters, digits and hyphens. It keys the cells of both browsers.",
     "url": "Per site. The page to open, https, without a login. The document is the page the status is read from.",
     "marker": "Per site. A CSS selector that matches something only when the real page arrived (not an error page, not a block page, not a consent wall).",
     "class": "Per site. One of the classes: calma (a quiet page), giornale (a newspaper full of advertising), negozio (a shop), applicazione (a single-page application or a search), protetta (a page behind protection)."
   },
   "classes": ["calma", "giornale", "negozio", "applicazione", "protetta"],
-  "min_informative": 11,
   "sites": [
     {"id": "developer-mozilla", "url": "https://developer.mozilla.org/en-US/", "marker": "#content", "class": "calma"},
     {"id": "python", "url": "https://www.python.org/", "marker": "[role=\"main\"]", "class": "calma"},
@@ -23,6 +21,7 @@
     {"id": "otto", "url": "https://www.otto.de/", "marker": "#avContent", "class": "negozio"},
     {"id": "apple", "url": "https://www.apple.com/it/store", "marker": "[role=\"main\"]", "class": "negozio"},
     {"id": "mediamarkt", "url": "https://www.mediamarkt.de/", "marker": "main", "class": "negozio"},
+    {"id": "duckduckgo", "url": "https://duckduckgo.com/", "marker": "#searchbox_homepage", "class": "applicazione"},
     {"id": "bing", "url": "https://www.bing.com/search?q=wikipedia", "marker": "#b_results", "class": "applicazione"},
     {"id": "openstreetmap", "url": "https://www.openstreetmap.org/", "marker": "#map", "class": "applicazione"},
     {"id": "walmart", "url": "https://www.walmart.com/", "marker": "main", "class": "protetta"}

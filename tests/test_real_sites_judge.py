@@ -7,8 +7,10 @@ cells that differ):
 * RED: stock is good in all three runs and ours is not good in at least two of the three;
 * INCOMPLETE: a cell that differs in the first pass has three runs of each browser; without them it is a problem ("giro incompleto"), never a red cell;
 * NO INFORMATION: stock is not good in every run (a blocked, fallen or changed site): never red, ours is reported as data;
-* the job is red too when a site was not visited by both browsers, when the list has no sites or ``min_informative`` is below 1, or when fewer cells than
-  ``min_informative`` carry information ("il giro non ha misurato"); the admission is red when the file holds a site it would drop or a minimum it cannot back.
+* the job is red too when a site was not visited by both browsers, when the list has no sites, or when fewer cells carry information than half the sites rounded
+  up ("il giro non ha misurato"); the minimum is computed from the list and is not a field of the file;
+* the admission is red only for a defect of the list (a pass missing, a site never good on a system and not protetta, more than 4 protetta, more than 20 sites, a
+  ``min_informative`` in the file), never because a site was good in some passes and not in all.
 
 The six cases of the design come first, each on known-bad input; the rest are the helpers around them. No time is read or asserted anywhere here.
 """
@@ -66,7 +68,7 @@ def row(result, site_id):
 def test_stock_good_three_of_three_and_ours_good_once_is_red():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(), cell(load="timeout"), cell(status="4xx"))
-    result = judge(stock, ours, [SITE], 1)
+    result = judge(stock, ours, [SITE])
     assert row(result, "site-a")["state"] == "red"
     assert result.verdict == "red" and result.exit_code == 1
     assert result.red == 1
@@ -75,7 +77,7 @@ def test_stock_good_three_of_three_and_ours_good_once_is_red():
 def test_stock_good_three_of_three_and_ours_good_twice_is_green():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(), cell(), cell(networkidle="timeout"))
-    result = judge(stock, ours, [SITE], 1)
+    result = judge(stock, ours, [SITE])
     assert row(result, "site-a")["state"] == "green"
     assert result.verdict == "green" and result.exit_code == 0
     assert result.red == 0 and result.informative == 1
@@ -89,7 +91,7 @@ def test_stock_good_three_of_three_and_ours_good_twice_is_green():
 ], ids=["blocked in all runs", "bad in the last run", "bad in the first run", "canary of stock fails"])
 def test_a_stock_that_is_not_good_gives_no_information_and_is_never_red(stock_cells):
     ours = runs_of("site-a", cell(load="error:NS_ERROR_NET_RESET"), cell(load="timeout"), cell(status="5xx"))
-    result = judge(anchored(runs_of("site-a", *stock_cells)), anchored(ours), [ANCHOR, SITE], 1)
+    result = judge(anchored(runs_of("site-a", *stock_cells)), anchored(ours), [ANCHOR, SITE])
     assert row(result, "site-a")["state"] == "no_information"
     assert result.red == 0 and result.informative == 1, "the anchor is the one cell with information"
     assert result.verdict == "green" and result.exit_code == 0
@@ -98,7 +100,7 @@ def test_a_stock_that_is_not_good_gives_no_information_and_is_never_red(stock_ce
 def test_the_outcome_of_ours_is_reported_where_stock_gives_no_information():
     stock = runs_of("site-a", cell(status="4xx"), cell(status="4xx"), cell(status="4xx"))
     ours = runs_of("site-a", cell(), cell(), cell())
-    result = judge(anchored(stock), anchored(ours), [ANCHOR, SITE], 1)
+    result = judge(anchored(stock), anchored(ours), [ANCHOR, SITE])
     assert row(result, "site-a")["state"] == "no_information"
     assert row(result, "site-a")["ours"]["good"] == 3 and row(result, "site-a")["stock"]["good"] == 0
     assert result.ours_good_stock_not == 1
@@ -108,26 +110,15 @@ def test_the_outcome_of_ours_is_reported_where_stock_gives_no_information():
 def test_a_site_missing_from_one_of_the_two_passes_is_red():
     stock = [{"site-a": cell(), "site-b": cell()}]
     ours = [{"site-a": cell()}]
-    result = judge(stock, ours, [SITE, OTHER], 1)
+    result = judge(stock, ours, [SITE, OTHER])
     assert row(result, "site-b")["state"] == "missing"
     assert result.verdict == "red" and result.exit_code == 1
     assert any("site-b" in p and "ours" in p for p in result.problems), result.problems
     # the same site missing from the pass of stock is just as red, and a pass that is not there at all misses every site
-    flipped = judge(ours, stock, [SITE, OTHER], 1)
+    flipped = judge(ours, stock, [SITE, OTHER])
     assert flipped.verdict == "red" and any("site-b" in p and "stock" in p for p in flipped.problems)
-    nothing = judge([], stock, [SITE, OTHER], 1)
+    nothing = judge([], stock, [SITE, OTHER])
     assert nothing.verdict == "red" and len(nothing.problems) >= 2
-
-
-def test_informative_cells_below_the_minimum_make_the_round_red_with_its_reason():
-    stock = [{"site-a": cell(), "site-b": cell(status="4xx")}] + [{"site-b": cell(status="4xx")}] * 2
-    ours = [{"site-a": cell(), "site-b": cell()}] + [{"site-b": cell()}] * 2
-    result = judge(stock, ours, [SITE, OTHER], 2)
-    assert result.informative == 1
-    assert result.verdict == "red" and result.exit_code == 1
-    assert any("il giro non ha misurato" in p for p in result.problems), result.problems
-    enough = judge(stock, ours, [SITE, OTHER], 1)
-    assert enough.verdict == "green" and enough.problems == []
 
 
 def test_a_canary_that_fails_only_for_ours_with_the_real_page_good_is_red():
@@ -136,7 +127,7 @@ def test_a_canary_that_fails_only_for_ours_with_the_real_page_good_is_red():
     for r in ours:
         # the real page was good in every other respect
         assert {k: v for k, v in r["site-a"].items() if k != "canary"} == {k: v for k, v in GOOD.items() if k != "canary"}
-    result = judge(stock, ours, [SITE], 1)
+    result = judge(stock, ours, [SITE])
     assert row(result, "site-a")["state"] == "red"
     assert "canary" in row(result, "site-a")["ours"]["why"]
     assert result.verdict == "red" and result.exit_code == 1
@@ -145,12 +136,12 @@ def test_a_canary_that_fails_only_for_ours_with_the_real_page_good_is_red():
 # --- the runs of a cell, and the numbers -----------------------------------------------------------------------------------------------------
 def test_a_cell_that_did_not_differ_has_one_run_each_and_the_later_runs_hold_only_the_differing_cells():
     # good and good in the first pass is green and is not asked again
-    result = judge([{"site-a": cell()}], [{"site-a": cell()}], [SITE], 1)
+    result = judge([{"site-a": cell()}], [{"site-a": cell()}], [SITE])
     assert row(result, "site-a")["state"] == "green" and row(result, "site-a")["stock"]["runs"] == 1
     # the later runs hold only the differing cells: a site absent from them is not a missing site
     stock = [{"site-a": cell(), "site-b": cell()}, {"site-a": cell()}, {"site-a": cell()}]
     ours = [{"site-a": cell(), "site-b": cell()}, {"site-a": cell()}, {"site-a": cell()}]
-    result = judge(stock, ours, [SITE, OTHER], 2)
+    result = judge(stock, ours, [SITE, OTHER])
     assert result.verdict == "green" and row(result, "site-b")["stock"]["runs"] == 1 and row(result, "site-a")["stock"]["runs"] == 3
 
 
@@ -158,7 +149,7 @@ def test_the_judge_does_not_touch_what_it_is_given():
     stock = runs_of("site-a", cell(), cell(), cell())
     ours = runs_of("site-a", cell(load="timeout"), cell(load="timeout"), cell())
     before = copy.deepcopy((stock, ours, [SITE]))
-    judge(stock, ours, [SITE], 1)
+    judge(stock, ours, [SITE])
     assert (stock, ours, [SITE]) == before
 
 
@@ -168,7 +159,7 @@ def test_the_three_numbers_of_the_summary():
              {"site-a": cell(), "site-c": cell(status="4xx")}]
     ours = [{"site-a": cell(load="timeout"), "site-b": cell(), "site-c": cell()}, {"site-a": cell(status="5xx"), "site-c": cell()},
             {"site-a": cell(marker=False), "site-c": cell()}]
-    result = judge(stock, ours, sites, 1)
+    result = judge(stock, ours, sites)
     assert (result.informative, result.red, result.ours_good_stock_not) == (2, 1, 1)
     text = judge_module.render_markdown(result)
     assert "site-a" in text and "site-b" in text and "site-c" in text
@@ -197,72 +188,104 @@ def _site(site_id, klass="calma"):
     return {"id": site_id, "url": "https://%s.example/" % site_id, "marker": "#main", "class": klass}
 
 
+MEDIAMARKT = {"id": "mediamarkt", "url": "https://www.mediamarkt.de/", "marker": "main", "class": "negozio"}
+DUCKDUCKGO = {"id": "duckduckgo", "url": "https://duckduckgo.com/", "marker": "#searchbox_homepage", "class": "applicazione"}
+#: What the two sites really did, once in five passes, on Linux: a challenge page for the address of the runner, and a load that did not finish.
+MEDIAMARKT_CHALLENGE = {"load": "ok", "networkidle": "ok", "status": "4xx", "marker": False, "canary": "ok"}
+DUCKDUCKGO_TIMEOUT = {"load": "timeout", "networkidle": "ok", "status": "none", "marker": False, "canary": "ok"}
+
+
 def _passes(per_site, n=5):
-    """``per_site``: id -> a cell, or a function of the pass number (to make an unstable site). Five passes of stock."""
+    """``per_site``: id -> a cell, or a function of the pass number. ``n`` passes of stock."""
     return [{sid: (c(i) if callable(c) else c) for sid, c in per_site.items()} for i in range(n)]
 
 
-def _decisions(report):
-    return {d["id"]: (d["decision"], d["reason"]) for d in report["decisions"]}
+def _admit_args(tmp_path, sites, passes_by_os, extra_in_file=None):
+    """The file of the list and the passes of stock of each system, written; returns the arguments of the ``admit`` command."""
+    sites_file = tmp_path / "sites.json"
+    sites_file.write_text(json.dumps({**(extra_in_file or {}), "sites": sites}), encoding="utf-8")
+    groups = []
+    for label, passes in passes_by_os.items():
+        files = []
+        for n, cells in enumerate(passes, 1):
+            path = tmp_path / ("%s-%d.json" % (label, n))
+            path.write_text(json.dumps({"browser": "stock", "cells": cells}), encoding="utf-8")
+            files.append(str(path))
+        groups += ["--os", label, *files]
+    return ["admit", "--sites", str(sites_file), *groups, "--summary", str(tmp_path / "admission.md")]
 
 
-def test_admission_keeps_the_good_drops_the_blocked_and_the_unstable_and_says_why():
-    sites = [_site("good"), _site("blocked", "giornale"), _site("unstable"), _site("shield", "protetta"), _site("shield-unstable", "protetta")]
-    runs = _passes({"good": cell(), "blocked": cell(status="4xx"), "unstable": lambda i: cell(load="timeout") if i == 3 else cell(),
-                    "shield": cell(status="4xx"), "shield-unstable": lambda i: cell(status="4xx") if i == 0 else cell()})
-    report = judge_module.admission({"linux": runs, "windows": [dict(r) for r in runs]}, sites, expected_runs=5)
-    decided = _decisions(report)
-    assert decided["good"][0] == "keep" and "good 5 of 5" in decided["good"][1]
-    assert decided["blocked"][0] == "drop" and "blocked 5 of 5" in decided["blocked"][1]
-    assert decided["unstable"][0] == "drop" and "not the same 5 of 5" in decided["unstable"][1]
-    assert decided["shield"][0] == "keep" and "as data" in decided["shield"][1]
-    assert decided["shield-unstable"][0] == "drop", "an unstable site is always dropped, whatever its class"
-    assert report["kept"] == ["good", "shield"]
-    assert report["linux"]["same"] == 3 and report["linux"]["good"] == 1
-    text = judge_module.render_admission(report)
-    assert "| blocked | giornale |" in text and "| drop |" in text and "| keep |" in text and "not the same 5 of 5" in text
+def _summary(tmp_path):
+    return (tmp_path / "admission.md").read_text(encoding="utf-8")
 
 
-def test_admission_blocked_on_one_system_only_is_blocked_there():
-    sites = [_site("a"), _site("b", "protetta")]
-    linux = _passes({"a": cell(), "b": cell()})
-    windows = _passes({"a": cell(status="4xx"), "b": cell(status="4xx")})
-    decided = _decisions(judge_module.admission({"linux": linux, "windows": windows}, sites, expected_runs=5))
-    assert decided["a"][0] == "drop" and "windows" in decided["a"][1]
-    assert decided["b"][0] == "keep"
+def test_the_minimum_of_information_is_half_the_sites_rounded_up():
+    assert [judge_module.information_minimum(n) for n in (0, 1, 2, 3, 14, 15, 20)] == [0, 1, 1, 2, 7, 8, 10]
 
 
-def test_admission_keeps_at_most_four_protected_and_twenty_in_all():
-    sites = [_site("p%d" % i, "protetta") for i in range(6)] + [_site("c%02d" % i) for i in range(22)]
-    runs = _passes({s["id"]: (cell(status="4xx") if s["id"] in ("p0", "p1") else cell()) for s in sites})
-    report = judge_module.admission({"linux": runs}, sites, expected_runs=5)
-    decided = _decisions(report)
-    protected = [i for i in decided if i.startswith("p") and decided[i][0] == "keep"]
-    assert sorted(protected) == ["p2", "p3", "p4", "p5"], "within the four, the good ones of the class come before the ones kept as data"
-    assert decided["p0"][0] == "drop" and "4" in decided["p0"][1]
-    assert len(report["kept"]) == 20
-    assert [i for i in report["kept"] if i.startswith("c")] == ["c%02d" % i for i in range(16)], "the others fill the rest in the order of the list"
-    assert decided["c16"][0] == "drop" and "20" in decided["c16"][1]
-    assert report["linux"]["kept_good"] == 20 and report["min_informative"] == 17
-    # a class with fewer good sites than four keeps the blocked ones as data, and they do not count
-    blocked_first = judge_module.admission({"linux": _passes({s["id"]: (cell(status="4xx") if s["id"] in ("p0", "p1") else cell()) for s in sites[:2]})},
-                                           sites[:2], expected_runs=5)
-    assert blocked_first["kept"] == ["p0", "p1"] and blocked_first["linux"]["kept_good"] == 0
+def test_a_site_good_in_some_passes_stays_with_its_count_and_the_admission_is_green(tmp_path):
+    sites = [_site("steady"), MEDIAMARKT, DUCKDUCKGO]
+    linux = _passes({"steady": cell(), "mediamarkt": lambda i: MEDIAMARKT_CHALLENGE if i == 2 else cell(),
+                     "duckduckgo": lambda i: DUCKDUCKGO_TIMEOUT if i == 4 else cell()})
+    windows = _passes({s["id"]: cell() for s in sites})
+    assert judge_module.main(_admit_args(tmp_path, sites, {"linux": linux, "windows": windows})) == 0
+    text = _summary(tmp_path)
+    assert "4 of 5 on linux" in text and "5 of 5 on windows" in text
+    assert "mediamarkt" in text and "duckduckgo" in text
+    assert "min_informative" not in text, "the admission computes no minimum"
 
 
-def test_admission_min_informative_is_the_good_five_of_five_minus_three():
-    sites = [_site("s%d" % i) for i in range(8)]
-    big = judge_module.admission({"linux": _passes({s["id"]: cell() for s in sites})}, sites, expected_runs=5)
-    assert big["linux"]["good"] == 8 and big["linux"]["min_informative"] == 5 and big["min_informative"] == 5
-    assert "min_informative" in judge_module.render_admission(big)
-    few = judge_module.admission({"linux": _passes({"s0": cell()})}, sites[:1], expected_runs=5)
-    assert few["min_informative"] == 0, "never below 0"
+def test_a_site_never_good_on_a_system_and_not_protected_is_red(tmp_path):
+    sites = [_site("steady"), _site("wrong-marker", "giornale")]
+    linux = _passes({"steady": cell(), "wrong-marker": cell(marker=False)})
+    windows = _passes({s["id"]: cell() for s in sites})
+    assert judge_module.main(_admit_args(tmp_path, sites, {"linux": linux, "windows": windows})) == 1
+    assert "wrong-marker" in _summary(tmp_path) and "never good on linux" in _summary(tmp_path)
+    # the same site, good on Linux and never good on Windows, is just as red
+    assert judge_module.main(_admit_args(tmp_path, sites, {"linux": windows, "windows": linux})) == 1
+    assert "never good on windows" in _summary(tmp_path)
 
 
-def test_admission_refuses_a_run_that_is_missing():
-    report = judge_module.admission({"linux": [{"site-a": cell()}] * 4}, [SITE], expected_runs=5)
-    assert report["problems"] and report["linux"]["same"] == 0
-    assert _decisions(report)["site-a"][0] == "drop"
+def test_a_protected_site_never_good_is_kept_up_to_four(tmp_path):
+    def blocked(count):
+        sites = [_site("steady")] + [_site("shield%d" % i, "protetta") for i in range(count)]
+        cells = {s["id"]: (cell() if s["id"] == "steady" else cell(status="4xx", marker=False)) for s in sites}
+        return sites, {"linux": _passes(cells), "windows": _passes(cells)}
+
+    sites, passes = blocked(4)
+    assert judge_module.main(_admit_args(tmp_path, sites, passes)) == 0
+    sites, passes = blocked(5)
+    assert judge_module.main(_admit_args(tmp_path, sites, passes)) == 1
+    assert "more than 4" in _summary(tmp_path)
+
+
+@pytest.mark.parametrize("count, exit_code", [(20, 0), (21, 1)])
+def test_a_list_of_more_than_twenty_sites_is_red(tmp_path, count, exit_code):
+    sites = [_site("s%02d" % i) for i in range(count)]
+    cells = {s["id"]: cell() for s in sites}
+    assert judge_module.main(_admit_args(tmp_path, sites, {"linux": _passes(cells), "windows": _passes(cells)})) == exit_code
+    if exit_code:
+        assert "more than 20" in _summary(tmp_path)
+
+
+def test_the_admission_is_red_for_a_pass_that_is_missing(tmp_path):
+    cells = {"steady": cell()}
+    assert judge_module.main(_admit_args(tmp_path, [_site("steady")], {"linux": _passes(cells, 4), "windows": _passes(cells)})) == 1
+    assert "4 passes of stock, 5 expected" in _summary(tmp_path)
+
+
+def test_the_admission_of_an_empty_list_is_green(tmp_path):
+    assert judge_module.main(_admit_args(tmp_path, [], {"linux": _passes({}), "windows": _passes({})})) == 0
+
+
+def test_a_list_with_a_min_informative_is_not_a_list(tmp_path):
+    problems = judge_module.validate_sites({"min_informative": 3, "sites": [_site("a")]})
+    assert any("min_informative" in p for p in problems), problems
+    assert judge_module.validate_sites({"sites": [_site("a")]}) == []
+    cells = {"a": cell()}
+    with pytest.raises(SystemExit) as refused:
+        judge_module.main(_admit_args(tmp_path, [_site("a")], {"linux": _passes(cells), "windows": _passes(cells)}, {"min_informative": 3}))
+    assert "min_informative" in str(refused.value)
 
 
 def test_what_a_pass_adds_to_diagnose_a_marker_does_not_enter_the_judgement():
@@ -270,12 +293,14 @@ def test_what_a_pass_adds_to_diagnose_a_marker_does_not_enter_the_judgement():
     # the judge: the extra field changes nothing, a good cell stays good and a diagnosed one is the same as one without
     assert judge_module.is_good(cell(diagnosis={"status": 200, "title": "x", "ids": []}))
     stock = runs_of("site-a", cell(), cell(), cell())
-    with_diagnosis = judge(stock, runs_of("site-a", diagnosed, diagnosed, diagnosed), [SITE], 1)
-    without = judge(stock, runs_of("site-a", cell(marker=False), cell(marker=False), cell(marker=False)), [SITE], 1)
-    assert (with_diagnosis.verdict, with_diagnosis.table[0]["state"], with_diagnosis.table[0]["ours"]["why"]) ==            (without.verdict, without.table[0]["state"], without.table[0]["ours"]["why"])
-    # the admission: five passes that differ only in the diagnosis are the same outcome
-    runs = [{"site-a": cell(marker=False, diagnosis={"status": 403, "title": "t%d" % i, "ids": [str(i)]})} for i in range(5)]
-    assert _decisions(judge_module.admission({"linux": runs}, [_site("site-a", "protetta")], expected_runs=5))["site-a"][0] == "keep"
+    with_diagnosis = judge(stock, runs_of("site-a", diagnosed, diagnosed, diagnosed), [SITE])
+    without = judge(stock, runs_of("site-a", cell(marker=False), cell(marker=False), cell(marker=False)), [SITE])
+    assert (with_diagnosis.verdict, with_diagnosis.table[0]["state"], with_diagnosis.table[0]["ours"]["why"]) == \
+           (without.verdict, without.table[0]["state"], without.table[0]["ours"]["why"])
+    # the admission counts the good passes by the five fields: a diagnosis does not make a pass good or bad
+    runs = [{"site-a": cell(marker=False, diagnosis={"status": 403, "title": "t%d" % i, "ids": [str(i)]})} for i in range(4)] + [{"site-a": cell()}]
+    row = judge_module.admission({"linux": runs}, [_site("site-a", "protetta")], expected_runs=5)["linux"]["rows"][0]
+    assert (row["good"], row["runs"]) == (1, 5)
 
 
 # --- an incomplete round is not a red cell, and an empty round did not measure ---------------------------------------------------------------
@@ -283,84 +308,51 @@ def test_a_differing_cell_without_its_three_runs_is_an_incomplete_round_and_not_
     for runs in (1, 2):
         stock = [{"site-a": cell(), "site-b": cell()}] + [{"site-a": cell()}] * (runs - 1)
         ours = [{"site-a": cell(load="timeout"), "site-b": cell()}] + [{"site-a": cell(load="timeout")}] * (runs - 1)
-        result = judge(stock, ours, [SITE, OTHER], 1)
+        result = judge(stock, ours, [SITE, OTHER])
         assert row(result, "site-a")["state"] == "incomplete", runs
         assert result.red == 0, "the missing runs are the round's fault, not a cell that is red"
         assert result.verdict == "red" and result.exit_code == 1
         assert any("giro incompleto" in p and "site-a" in p for p in result.problems), result.problems
     # a cell that differs the other way round (stock not good, ours good) is asked three times too
-    reverse = judge([{"site-a": cell(status="4xx"), "site-b": cell()}], [{"site-a": cell(), "site-b": cell()}], [SITE, OTHER], 1)
+    reverse = judge([{"site-a": cell(status="4xx"), "site-b": cell()}], [{"site-a": cell(), "site-b": cell()}], [SITE, OTHER])
     assert row(reverse, "site-a")["state"] == "incomplete" and reverse.verdict == "red"
     # with its three runs the same cell is judged
-    full = judge(runs_of("site-a", cell(), cell(), cell()), runs_of("site-a", cell(load="timeout"), cell(load="timeout"), cell()), [SITE], 1)
+    full = judge(runs_of("site-a", cell(), cell(), cell()), runs_of("site-a", cell(load="timeout"), cell(load="timeout"), cell()), [SITE])
     assert row(full, "site-a")["state"] == "red" and not any("giro incompleto" in p for p in full.problems)
 
 
 def test_a_cell_that_did_not_differ_needs_no_more_runs():
-    result = judge([{"site-a": cell(), "site-b": cell(status="4xx")}], [{"site-a": cell(), "site-b": cell(load="timeout")}], [SITE, OTHER], 1)
+    result = judge([{"site-a": cell(), "site-b": cell(status="4xx")}], [{"site-a": cell(), "site-b": cell(load="timeout")}], [SITE, OTHER])
     assert [r["state"] for r in result.table] == ["green", "no_information"]
     assert result.verdict == "green" and result.problems == []
 
 
 def test_a_round_with_no_sites_did_not_measure():
     for stock, ours in (([{}], [{}]), ([], [])):
-        for minimum in (0, 1, 5):
-            result = judge(stock, ours, [], minimum)
-            assert result.verdict == "red" and result.exit_code == 1, minimum
-            assert any("il giro non ha misurato" in p for p in result.problems), result.problems
+        result = judge(stock, ours, [])
+        assert result.verdict == "red" and result.exit_code == 1
+        assert any("il giro non ha misurato" in p for p in result.problems), result.problems
 
 
-def test_a_minimum_below_one_did_not_measure():
-    stock, ours = runs_of("site-a", cell(), cell(), cell()), runs_of("site-a", cell(), cell(), cell())
-    for minimum in (0, -1):
-        result = judge(stock, ours, [SITE], minimum)
-        assert result.verdict == "red" and result.exit_code == 1, minimum
-        assert any("il giro non ha misurato" in p and "minimum" in p for p in result.problems), result.problems
-    assert judge(stock, ours, [SITE], 1).verdict == "green"
+def _fifteen(informative):
+    """Fifteen sites, the first ``informative`` of them good for both browsers, the others blocked for both (no information, and not a difference)."""
+    sites = [_site("s%02d" % i) for i in range(15)]
+    run = {s["id"]: (cell() if i < informative else cell(status="4xx")) for i, s in enumerate(sites)}
+    return judge([dict(run)], [dict(run)], sites)
 
 
-# --- the admission decides ----------------------------------------------------------------------------------------------------------------
-def _admit_files(tmp_path, sites, min_informative, cells_of_site):
-    """The file of the list and five passes of stock for each system, every pass with ``cells_of_site`` (site id -> cell)."""
-    sites_file = tmp_path / "sites.json"
-    sites_file.write_text(json.dumps({"min_informative": min_informative, "sites": sites}), encoding="utf-8")
-    groups = []
-    for label in ("linux", "windows"):
-        files = []
-        for n in range(1, 6):
-            path = tmp_path / ("%s-%d.json" % (label, n))
-            path.write_text(json.dumps({"browser": "stock", "cells": cells_of_site}), encoding="utf-8")
-            files.append(str(path))
-        groups += ["--os", label, *files]
-    return ["admit", "--sites", str(sites_file), *groups, "--summary", str(tmp_path / "admission.md")]
-
-
-def test_the_admission_is_red_when_the_file_holds_a_site_the_admission_would_drop(tmp_path):
-    sites = [_site("good-%d" % i) for i in range(5)] + [_site("blocked", "giornale")]
-    cells = {s["id"]: cell() for s in sites}
-    cells["blocked"] = cell(status="4xx")
-    assert judge_module.main(_admit_files(tmp_path, sites, 2, cells)) == 1
-    text = (tmp_path / "admission.md").read_text(encoding="utf-8")
-    assert "blocked" in text and "would drop" in text
-    # the list without that site, and with the minimum the admission computes, is green
-    assert judge_module.main(_admit_files(tmp_path, sites[:5], 2, {s["id"]: cell() for s in sites[:5]})) == 0
-
-
-@pytest.mark.parametrize("written, exit_code", [(0, 1), (3, 1), (9, 1), (2, 0), (1, 0)], ids=["zero", "above by one", "far above", "equal", "lower"])
-def test_the_admission_is_red_when_the_minimum_is_zero_or_above_the_computed_one(tmp_path, written, exit_code):
-    sites = [_site("good-%d" % i) for i in range(5)]       # 5 good five of five, minus 3: the admission computes 2
-    assert judge_module.main(_admit_files(tmp_path, sites, written, {s["id"]: cell() for s in sites})) == exit_code
-    assert "min_informative" in (tmp_path / "admission.md").read_text(encoding="utf-8")
-
-
-def test_the_admission_of_an_empty_list_is_green(tmp_path):
-    assert judge_module.main(_admit_files(tmp_path, [], 0, {})) == 0
+def test_eight_informative_cells_out_of_fifteen_is_enough_and_seven_is_not():
+    enough = _fifteen(8)
+    assert enough.informative == 8 and enough.verdict == "green" and enough.problems == []
+    short = _fifteen(7)
+    assert short.informative == 7 and short.verdict == "red" and short.exit_code == 1
+    assert any("il giro non ha misurato" in p and "minimum is 8" in p for p in short.problems), short.problems
 
 
 # --- the files ------------------------------------------------------------------------------------------------------------------------------
 def test_the_cli_reads_the_cells_and_writes_the_summary_and_the_exit_code(tmp_path):
     sites_file = tmp_path / "sites.json"
-    sites_file.write_text(json.dumps({"min_informative": 1, "sites": [SITE]}), encoding="utf-8")
+    sites_file.write_text(json.dumps({"sites": [SITE]}), encoding="utf-8")
 
     def write(name, cells):
         path = tmp_path / name
@@ -378,7 +370,7 @@ def test_the_cli_reads_the_cells_and_writes_the_summary_and_the_exit_code(tmp_pa
 
 def test_the_sites_file_has_its_schema_and_every_site_a_class():
     data = json.loads((ROOT / "tests" / "realsites" / "sites.json").read_text(encoding="utf-8"))
-    assert isinstance(data["min_informative"], int) and data["min_informative"] >= 0
+    assert "min_informative" not in data and "min_informative" not in data["fields"], "the minimum is half the sites, computed by the judge"
     assert isinstance(data["sites"], list) and set(data["classes"]) == {"calma", "giornale", "negozio", "applicazione", "protetta"}
     for field in ("id", "url", "marker", "class"):
         assert data["fields"][field].strip()
