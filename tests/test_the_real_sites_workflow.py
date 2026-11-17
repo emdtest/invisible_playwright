@@ -2,7 +2,8 @@
 
 * the version of the post-publication round is the tag of the publish run (``head_branch`` without its ``v``), and a run that is not of a ``v*`` tag is red;
   the other events ask the index;
-* the token of the workflow is in the steps that call ``gh`` (the plan and the admission report) and nowhere else: a step that opens real sites never sees it;
+* the token of the workflow is in three named steps (the plan, the admission report, the install and fetch of the round) and nowhere else: a step that opens real
+  sites never sees it, and the install and fetch step launches no browser;
 * a pull request that touches the list runs the admission AND the round: the round does not wait on the admission and is not skipped by it.
 """
 import re
@@ -37,15 +38,30 @@ def test_the_version_of_the_round_after_a_publication_is_the_tag_of_the_publish_
     assert "pypi.org/pypi/invisible-playwright/json" in plan, "the other events read the index"
 
 
-def test_the_token_is_in_the_steps_that_call_gh_and_nowhere_else():
-    assert not re.search(r"GITHUB_TOKEN|GH_TOKEN|github\.token", _code(HEAD)), "no token at the level of the workflow"
-    jobs = _jobs()
-    for name in ("round", "admit"):
-        assert not re.search(r"GITHUB_TOKEN|GH_TOKEN|github\.token|secrets\.", _code(jobs[name])), "%s opens real sites and sees no token" % name
-    callers = [s for s in _steps() if re.search(r"\bgh (api|run) ", _code(s))]
-    assert len(callers) == 2, "the plan and the admission report call gh"
-    for step in callers:
-        assert "GH_TOKEN: ${{ github.token }}" in step
+TOKEN = re.compile(r"GITHUB_TOKEN|GH_TOKEN|github\.token|secrets\.")
+STEPS_WITH_THE_TOKEN = ["id: plan", "name: The two clean venvs", "name: Which sites are the same five of five, and the minimum to write"]
+
+
+def _first_line(step):
+    return step.splitlines()[0].strip()
+
+
+def test_the_token_is_in_exactly_three_named_steps_and_in_none_that_opens_real_sites():
+    assert not TOKEN.search(_code(HEAD)), "no token at the level of the workflow"
+    for name, job in _jobs().items():
+        assert not TOKEN.search(_code(job.split("    steps:", 1)[0])), "%s has a token at the level of the job" % name
+    steps = _steps()
+    assert [_first_line(s) for s in steps if TOKEN.search(_code(s))] == STEPS_WITH_THE_TOKEN
+    for step in steps:
+        if "run_real_sites.py" in step:
+            assert not TOKEN.search(_code(step)), "a step that runs the passes sees the token: " + _first_line(step)
+    # the step of the install and the fetch launches no browser, and the steps that call gh carry the token
+    install = next(s for s in steps if _first_line(s) == "name: The two clean venvs")
+    assert "invisible_playwright fetch" in install and "run_real_sites.py" not in install and "xvfb-run" not in install
+    for step in steps:
+        if re.search(r"\bgh (api|run) ", _code(step)):
+            assert "GH_TOKEN: ${{ github.token }}" in step
+    assert "GH_TOKEN: ${{ github.token }}" in install
 
 
 def test_a_pull_request_that_touches_the_list_runs_the_admission_and_the_round():

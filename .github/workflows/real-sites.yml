@@ -25,7 +25,8 @@
 # systems), and it is red when the file holds a site it would drop or a `min_informative` of 0 or above the computed one. Where stock does not find the marker, its
 # cell in the artifact also holds the status, the title and the first 40 element ids of the page, to fix the marker in the same pull request; the judge ignores them.
 #
-# TOKEN. The token of the workflow is in the two steps that call `gh` (the plan and the report of the admission) and nowhere else: a step that opens real sites never sees it.
+# TOKEN. The token of the workflow is in three steps and nowhere else: the plan and the report of the admission (they call `gh`) and the install and fetch of the
+# round (the engine is downloaded from GitHub; that step launches no browser). A step that runs the passes never sees it.
 #
 # No click and no handling of a consent wall anywhere: both browsers see what the page shows.
 
@@ -133,6 +134,8 @@ jobs:
       # (the index may lag a few minutes behind a publication: only the install is asked again), then its engine is fetched the way a user fetches it.
       - name: The two clean venvs
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}   # the fetch of the engine is a download from GitHub; nothing here opens a page
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = Windows ]; then BIN=Scripts; EXE=python.exe; else BIN=bin; EXE=python; fi
