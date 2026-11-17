@@ -128,13 +128,14 @@ def visit(page, state, site, canary_url, timeouts, errors, diagnose=False):
 
 def diagnosis(page, code) -> dict:
     """What the document is, for fixing a marker: its HTTP status, its title and the first 40 ids of its elements. Read, never judged."""
-    out = {"http_status": code, "title": None, "ids": []}
+    out = {"http": code, "http_status": code, "title": None, "ids": []}
     try:
         out["title"] = page.title()
     except Exception:
         pass
     try:
-        out["ids"] = page.evaluate("() => Array.from(document.querySelectorAll('[id]')).slice(0, 40).map(e => e.id)")
+        ids = page.evaluate("() => Array.from(document.querySelectorAll('[id]')).map(e => e.id).filter(i => i).slice(0, 40)")
+        out["ids"] = [i for i in ids if isinstance(i, str) and i][:40]
     except Exception:
         pass
     return out
@@ -190,16 +191,20 @@ def main(argv=None) -> int:
     sites = read_sites(args.sites, args.only)
     timeouts = (args.load_timeout, args.idle_timeout)
 
-    from playwright.sync_api import Error as PWError, TimeoutError as PWTimeout, sync_playwright
-    errors = (PWError, PWTimeout)
-
+    # Each mode imports its own package and no other: the venv of ours holds invisible-playwright (its client is vendored, there is no `playwright` in it), the venv of
+    # stock holds playwright. The errors of ours are the ones its client raises: invisible_playwright.sync_api exports the classes of
+    # invisible_playwright/_pw/_impl/_errors.py, which the waiter of a navigation raises on a timeout (_pw/_impl/_waiter.py reject_on_timeout) and which the answer of
+    # the server is turned into by parse_error (_pw/_impl/_helper.py), so an `except TimeoutError` here catches what goto and wait_for_load_state raise.
     server, canary_url = serve_canary()
-    meta = {"browser": args.browser, "os": platform.system().lower(), "python": platform.python_version(), "playwright": metadata.version("playwright"),
+    meta = {"browser": args.browser, "os": platform.system().lower(), "python": platform.python_version(),
             "binary": args.binary, "core_ref": args.core_ref, "viewport": args.viewport, "load_timeout_ms": args.load_timeout,
             "idle_timeout_ms": args.idle_timeout, "only": args.only}
     cells, complete = {}, False  # filled site by site: a pass that dies keeps what it had, marked incomplete
     try:
         if args.browser == "stock":
+            from playwright.sync_api import Error as PWError, TimeoutError as PWTimeout, sync_playwright
+            errors = (PWError, PWTimeout)
+            meta["playwright"] = metadata.version("playwright")
             with sync_playwright() as p:
                 browser = p.firefox.launch(headless=False, **({"executable_path": args.binary} if args.binary else {}))
                 try:
@@ -208,7 +213,8 @@ def main(argv=None) -> int:
                 finally:
                     browser.close()
         else:
-            from invisible_playwright import InvisiblePlaywright
+            from invisible_playwright.sync_api import Error as PWError, InvisiblePlaywright, TimeoutError as PWTimeout
+            errors = (PWError, PWTimeout)
             meta["package"] = metadata.version("invisible-playwright")
             with InvisiblePlaywright(**({"binary_path": args.binary} if args.binary else {})) as browser:
                 meta["engine"] = browser.version
