@@ -24,6 +24,12 @@ One case for each family, so the failure says which one: Arial, Times New Roman,
 the persona answers to on every Windows. Each block holds accents (é è à ü), the typographic apostrophe, the euro sign and the
 quotation marks, Chinese, Arabic and Russian.
 
+Two more cases are a face of a collection that is NOT the first face of its file: MS PGothic (face 2 of msgothic5_32.ttc; face 0 is MS
+Gothic) and NSimSun (face 1 of simsun.ttc; face 0 is SimSun). A text run carries the path of the file AND the index of the face, and a
+parent that rebuilds the font from the path alone, or that lets the system choose the index, draws the first face (or another) of the
+same file. Their blocks hold the writing those faces draw (Japanese kana and kanji with Latin letters for MS PGothic, whose spacing is
+proportional where MS Gothic's is not; Chinese for NSimSun), so the wrong face gives other outlines and the bytes differ.
+
 Evidence, whether the case passes or fails: when ``RUNNER_TEMP`` is set (a GitHub runner) the case writes the screenshot, the two boxes
 as PNG files and a ``result.json`` (family, operating system, engine, sizes, sha256 of each box, how many pixels differ and where, and how
 many pixels of each box are not grey) under ``$RUNNER_TEMP/invpw-evidence/screenshot-bundle-fonts/<family>/``, which the e2e jobs upload.
@@ -49,8 +55,9 @@ pytestmark = pytest.mark.e2e
 OS_NAME = "windows" if sys.platform == "win32" else "linux"
 
 #: The families the persona declares and the bundle holds (the `f|` rows of the manifest in invisible_core: Arial, Times New Roman,
-#: Consolas and Segoe UI each have their files).
-FAMILIES = ["Arial", "Times New Roman", "Consolas", "Segoe UI"]
+#: Consolas and Segoe UI each have their files; MS PGothic and NSimSun are a face that is not the first of its .ttc, rows `f|msgothic5_32.ttc|2|`
+#: and `f|simsun.ttc|1|`).
+FAMILIES = ["Arial", "Times New Roman", "Consolas", "Segoe UI", "MS PGothic", "NSimSun"]
 
 #: The device pixel ratio is 1 and the text is greyscale: see the docstring. 4 is ANTIALIASED_QUALITY (5 is ClearType).
 PIN = {"screen.dpr": 1.0, "font.system_text_quality": 4}
@@ -75,7 +82,28 @@ const W = %(w)d, H = %(h)d;
 // ONE string is the block, as HTML in the page and inside the SVG image. Everything that decides how the text is drawn is in it:
 // the family, the size, the line height, the languages (which choose the fallback font of the Han and Arabic runs) and the colours.
 function markup(family) {
-  const lines = [
+  // The families that are a face of a .ttc that is NOT the first of its collection hold the writing that face draws, so that the
+  // face of the collection the parent rebuilds is the one whose outlines are in the block: MS PGothic is face 2 of msgothic5_32.ttc
+  // (face 0 is MS Gothic, which draws the same kana with another spacing) and NSimSun is face 1 of simsun.ttc (face 0 is SimSun).
+  const OWN = {
+    'MS PGothic': [
+      '<div lang="en">Hamburgefonstiv 0123456789 fi fl</div>',
+      '<div lang="ja">\\u65e5\\u672c\\u8a9e\\u306e\\u30c6\\u30ad\\u30b9\\u30c8\\u3001\\u3072\\u3089\\u304c\\u306a\\u3068\\u30ab\\u30bf\\u30ab\\u30ca</div>',
+      '<div lang="ja">ABC abc iiii llll WWWW \\uff71\\uff72\\uff73\\uff74\\uff75 \\u30ac\\u30ae\\u30b0\\u30b2\\u30b4</div>',
+      '<div lang="ja">\\u3072\\u3089\\u304c\\u306a \\u3042\\u3044\\u3046\\u3048\\u304a \\u304b\\u304d\\u304f\\u3051\\u3053 \\u3055\\u3057\\u3059\\u305b\\u305d</div>',
+      '<div lang="ja">\\u30ab\\u30bf\\u30ab\\u30ca \\u30a2\\u30a4\\u30a6\\u30a8\\u30aa \\u30ab\\u30ad\\u30af\\u30b1\\u30b3 \\u30b5\\u30b7\\u30b9\\u30bb\\u30bd</div>',
+      '<div lang="ja">\\u6f22\\u5b57 \\u6771\\u4eac \\u5927\\u962a \\u65e5\\u672c\\u8a9e \\u6587\\u5b57 \\u8868\\u793a</div>',
+    ],
+    'NSimSun': [
+      '<div lang="en">Hamburgefonstiv 0123456789 fi fl</div>',
+      '<div lang="zh-CN">\\u4e2d\\u6587\\u6c49\\u5b57\\u6d4b\\u8bd5\\uff0c\\u7b80\\u4f53\\u4e2d\\u6587\\u6587\\u672c</div>',
+      '<div lang="zh-CN">ABC abc iiii llll WWWW \\u4e2d\\u6587 0123</div>',
+      '<div lang="zh-CN">\\u4f60\\u597d\\uff0c\\u4e16\\u754c\\uff01\\u4eca\\u5929\\u5929\\u6c14\\u5f88\\u597d\\u3002</div>',
+      '<div lang="zh-CN">\\u6c49\\u5b57\\u6d4b\\u8bd5 \\u5b66\\u4e60 \\u5de5\\u4f5c \\u751f\\u6d3b \\u4e2d\\u56fd</div>',
+      '<div lang="zh-CN">\\u201c\\u5f15\\u53f7\\u201d\\u3001\\u300a\\u4e66\\u540d\\u300b\\u3001\\uff08\\u62ec\\u53f7\\uff09\\uff1b\\u6807\\u70b9</div>',
+    ],
+  };
+  const lines = OWN[family] || [
     '<div lang="en">Hamburgefonstiv 0123456789 fi fl</div>',
     '<div lang="fr">\\u00e9 \\u00e8 \\u00e0 \\u00fc \\u00c9 \\u00c8 \\u00c0 \\u00dc \\u00f1 \\u00e7 \\u00f8 \\u00df</div>',
     '<div lang="en">It\\u2019s \\u00ab\\u20ac \\u00a9 \\u2013 \\u2026\\u00bb \\u2018x\\u2019 \\u201cy\\u201d</div>',
