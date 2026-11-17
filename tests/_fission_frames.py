@@ -64,13 +64,17 @@ class Sites:
                 site = self.server.site
                 length = int(self.headers.get("Content-Length") or 0)
                 self.body = self.rfile.read(length) if length else b""
-                # `at` is when it arrived and `done` when its answer was written (the clock of the test process):
-                # what a test needs to say how long the network was quiet between two requests
+                # `at` is when it arrived, `sent` the instant before its answer starts to be written (after the delay) and
+                # `done` when the write returned (the clock of the test process). `sent` is the first instant the browser can
+                # have seen the request end, so it is what says how long the network was quiet: `done` is taken by a thread
+                # of the test process, which can lose the CPU or the GIL between the write and the stamp (the client runs in
+                # this process), and is then later than the real end.
                 entry = {"site": site, "path": url.path, "query": self.query, "method": self.command,
-                         "headers": dict(self.headers), "at": time.monotonic(), "done": None}
+                         "headers": dict(self.headers), "at": time.monotonic(), "sent": None, "done": None}
                 sites.requests.append(entry)
                 spec = sites._routes.get((site, url.path))
                 if spec is None:
+                    entry["sent"] = time.monotonic()
                     self.send_response(404)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
@@ -81,6 +85,7 @@ class Sites:
                     body = body.encode("utf-8")
                 if spec["delay"]:
                     time.sleep(spec["delay"])
+                entry["sent"] = time.monotonic()
                 try:
                     self.send_response(spec["status"])
                     self.send_header("Content-Type", spec["ctype"])
