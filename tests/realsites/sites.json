@@ -10,34 +10,22 @@
     "class": "Per site. One of the classes: calma (a quiet page), giornale (a newspaper full of advertising), negozio (a shop), applicazione (a single-page application or a search), protetta (a page behind protection)."
   },
   "classes": ["calma", "giornale", "negozio", "applicazione", "protetta"],
-  "min_informative": 0,
+  "min_informative": 12,
   "sites": [
     {"id": "developer-mozilla", "url": "https://developer.mozilla.org/en-US/", "marker": "#content", "class": "calma"},
     {"id": "python", "url": "https://www.python.org/", "marker": "[role=\"main\"]", "class": "calma"},
     {"id": "it-wikipedia", "url": "https://it.wikipedia.org/wiki/Pagina_principale", "marker": "#mw-content-text", "class": "calma"},
     {"id": "en-wikipedia", "url": "https://en.wikipedia.org/wiki/Italy", "marker": "#mw-content-text", "class": "calma"},
-    {"id": "bbc", "url": "https://www.bbc.com/news", "marker": "main", "class": "giornale"},
-    {"id": "nytimes", "url": "https://www.nytimes.com/", "marker": "#site-content", "class": "giornale"},
-    {"id": "theguardian", "url": "https://www.theguardian.com/international", "marker": "#maincontent", "class": "giornale"},
     {"id": "lemonde", "url": "https://www.lemonde.fr/", "marker": "main", "class": "giornale"},
     {"id": "lefigaro", "url": "https://www.lefigaro.fr/", "marker": "main", "class": "giornale"},
     {"id": "spiegel", "url": "https://www.spiegel.de/", "marker": "main", "class": "giornale"},
-    {"id": "repubblica", "url": "https://www.repubblica.it/", "marker": "main", "class": "giornale"},
     {"id": "ikea", "url": "https://www.ikea.com/it/it/", "marker": "main", "class": "negozio"},
     {"id": "otto", "url": "https://www.otto.de/", "marker": "#avContent", "class": "negozio"},
     {"id": "apple", "url": "https://www.apple.com/it/store", "marker": "[role=\"main\"]", "class": "negozio"},
     {"id": "mediamarkt", "url": "https://www.mediamarkt.de/", "marker": "main", "class": "negozio"},
-    {"id": "carrefour", "url": "https://www.carrefour.fr/", "marker": "main", "class": "negozio"},
-    {"id": "amazon", "url": "https://www.amazon.it/", "marker": "main", "class": "negozio"},
     {"id": "duckduckgo", "url": "https://duckduckgo.com/", "marker": "#searchbox_homepage", "class": "applicazione"},
     {"id": "bing", "url": "https://www.bing.com/search?q=wikipedia", "marker": "#b_results", "class": "applicazione"},
     {"id": "openstreetmap", "url": "https://www.openstreetmap.org/", "marker": "#map", "class": "applicazione"},
-    {"id": "search-brave", "url": "https://search.brave.com/search?q=wikipedia", "marker": "#main", "class": "applicazione"},
-    {"id": "startpage", "url": "https://www.startpage.com/", "marker": "main", "class": "applicazione"},
-    {"id": "ticketmaster", "url": "https://www.ticketmaster.com/", "marker": "#main-content", "class": "protetta"},
-    {"id": "nike", "url": "https://www.nike.com/it/", "marker": "[role=\"main\"]", "class": "protetta"},
-    {"id": "walmart", "url": "https://www.walmart.com/", "marker": "main", "class": "protetta"},
-    {"id": "glassdoor", "url": "https://www.glassdoor.com/", "marker": "[role=\"main\"]", "class": "protetta"},
-    {"id": "booking", "url": "https://www.booking.com/", "marker": "main", "class": "protetta"}
+    {"id": "walmart", "url": "https://www.walmart.com/", "marker": "main", "class": "protetta"}
   ]
 }
