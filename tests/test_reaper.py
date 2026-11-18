@@ -21,9 +21,8 @@ import time
 import pytest
 
 from invisible_core import process as core_process
-from invisible_playwright import _reaper
 from invisible_playwright._juggler import _reaped
-from invisible_playwright._reaper import (
+from invisible_core.process import (
     JobObjectGuard, NullGuard, SessionToken, find_processes, guard_for,
 )
 
@@ -38,7 +37,7 @@ _SLEEP = 30
 
 def _spawn(token) -> subprocess.Popen:
     env = dict(os.environ)
-    env.pop(_reaper.TOKEN_VAR, None)
+    env.pop(core_process.TOKEN_VAR, None)
     if token:
         env = token.stamp(env)
     return subprocess.Popen(
@@ -92,7 +91,7 @@ def test_a_child_inherits_the_token_and_is_reaped_with_the_parent():
         assert len(pids) >= 2, f"grandchild not found, only {pids}"
         killed = guard_for().reap(token)
         assert killed >= 2
-        assert _reaper.wait_until_gone(token, timeout=8.0)
+        assert core_process.wait_until_gone(token, timeout=8.0)
     finally:
         _reap_all(parent)
 
@@ -110,7 +109,7 @@ def test_it_does_not_touch_a_process_with_a_different_token():
         time.sleep(0.8)
         mine_pids = {p.pid for p in find_processes(mine)}
         assert guard_for().reap(mine) >= 1
-        assert _reaper.wait_until_gone(mine, timeout=8.0)
+        assert core_process.wait_until_gone(mine, timeout=8.0)
         assert b.poll() is None, "reaping one session killed the other's process"
 
         # The other session is still THERE, and nothing of the reaped one is.
@@ -138,7 +137,7 @@ def test_it_does_not_touch_an_unmarked_process():
     try:
         time.sleep(0.8)
         guard_for().reap(token)
-        assert _reaper.wait_until_gone(token, timeout=8.0)
+        assert core_process.wait_until_gone(token, timeout=8.0)
         assert plain.poll() is None, "an unmarked process was killed"
     finally:
         _reap_all(marked, plain)
@@ -164,7 +163,7 @@ def test_an_empty_token_never_matches_even_a_process_that_carries_an_empty_one()
     try:
         # Set the variable to empty rather than leaving it out entirely.
         env = dict(os.environ)
-        env[_reaper.TOKEN_VAR] = ""
+        env[core_process.TOKEN_VAR] = ""
         empty = subprocess.Popen(
             [sys.executable, "-c", f"import time; time.sleep({_SLEEP})"], env=env
         )
@@ -208,7 +207,7 @@ def test_the_null_guard_still_reaps_because_that_part_needs_no_kernel():
     try:
         time.sleep(0.8)
         assert NullGuard().reap(token) >= 1
-        assert _reaper.wait_until_gone(token, timeout=8.0)
+        assert core_process.wait_until_gone(token, timeout=8.0)
     finally:
         _reap_all(proc)
 
@@ -220,7 +219,7 @@ def test_a_token_is_a_value_not_a_string():
     assert a == SessionToken("abc") and a != SessionToken("abd")
     assert bool(a) and not bool(SessionToken())
     assert len({SessionToken("x"), SessionToken("x")}) == 1
-    assert a.stamp({"PATH": "/usr"})[_reaper.TOKEN_VAR] == "abc"
+    assert a.stamp({"PATH": "/usr"})[core_process.TOKEN_VAR] == "abc"
     assert a.stamp({"PATH": "/usr"})["PATH"] == "/usr", "stamp dropped the env"
 
 
@@ -234,7 +233,7 @@ def test_an_empty_token_matches_nothing_at_the_matcher_itself():
     """
     class CarriesEmpty:
         def environ(self):
-            return {_reaper.TOKEN_VAR: ""}
+            return {core_process.TOKEN_VAR: ""}
 
     assert SessionToken().matches(CarriesEmpty()) is False
     assert SessionToken("real").matches(CarriesEmpty()) is False
@@ -311,7 +310,7 @@ def test_the_final_reap_with_a_reaper_runs_after_it_and_spares_the_sender_until_
         assert sender.poll() is None, "the final reap killed the sender before the reaper had finished"
         assert sender.pid in {p.pid for p in find_processes(token)}
         reaper.finish()
-        assert _reaper.wait_until_gone(token, timeout=8.0), "the final reap did not run after the reaper"
+        assert core_process.wait_until_gone(token, timeout=8.0), "the final reap did not run after the reaper"
     finally:
         _reaped._reapers.pop(token.value, None)
         _reap_all(sender)
@@ -326,7 +325,7 @@ def test_the_final_reap_without_a_reaper_is_immediate():
     try:
         time.sleep(0.6)
         assert _reaped.final_reap(guard_for(), token) >= 1
-        assert _reaper.wait_until_gone(token, timeout=8.0)
+        assert core_process.wait_until_gone(token, timeout=8.0)
     finally:
         _reap_all(proc)
 

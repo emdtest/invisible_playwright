@@ -74,7 +74,7 @@ def _start_trap():
 def _truth_of(exit_ip):
     """The zone and the country the core's geo database gives the exit: the truth of these tests."""
     from invisible_core._geo import ip_to_country, ip_to_timezone
-    from invisible_core.download import ensure_geoip_mmdb
+    from invisible_core import ensure_geoip_mmdb
 
     database = ensure_geoip_mmdb()
     return ip_to_timezone(exit_ip, database), ip_to_country(exit_ip, database)

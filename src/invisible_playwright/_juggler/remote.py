@@ -718,7 +718,7 @@ def _launch_params(session: Any, *, virtual_display: bool, headless: bool,
     from invisible_core import configure_proxy, prepare_session_geo
     from invisible_core import make_virtual_display
     from invisible_playwright._engine import resolve_executable
-    from invisible_playwright._reaper import SessionToken
+    from invisible_core.process import SessionToken
 
     geo = prepare_session_geo(session._timezone, session._proxy,
                               session._locale_requested, seed=session.seed,

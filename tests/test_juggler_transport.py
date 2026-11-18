@@ -16,7 +16,6 @@ import threading
 
 import pytest
 
-from invisible_playwright._juggler import transport as factory
 from invisible_core.juggler.connection import EventListeners, ProtocolError
 
 from _servers import LocalServer
@@ -62,59 +61,6 @@ def _serve(body, asked=None):
 
 
 # ── without a browser ───────────────────────────────────────────────────────
-
-def test_a_name_that_is_not_the_driver_gets_the_only_transport(monkeypatch):
-    """⛔ THIS ASSERTED THE OPPOSITE UNTIL 2026-08-29, and the reason it
-    changed is that its reason expired.
-
-    The switch used to REFUSE an unknown value, arguing that a typo would
-    otherwise run the driver while the caller believed they were measuring the
-    Python path - a bench arm that is not what it says it is. That was true
-    while there were two transports. There is one: any value that is not
-    `driver` correctly yields the only thing there is, and a guard that
-    protects against nothing is a concept for nothing.
-
-    What still has to hold is the OTHER half, tested below: `driver` by name
-    must still explain what happened to it, because 0.7.4 shipped with the
-    driver as the default and somebody can have it set in a shell.
-    """
-    monkeypatch.setenv(factory.CHOICE_ENV, "jugler")
-    assert factory.chosen() == "jugler"
-    monkeypatch.setenv(factory.CHOICE_ENV, "anything-at-all")
-    assert factory.chosen() != factory.DRIVER, (
-        "only the exact name `driver` may reach the migration message")
-
-
-def test_the_default_is_the_PYTHON_SERVER(monkeypatch):
-    """⛔ IT FLIPPED ON 2026-08-28, AND ONLY ON EVIDENCE.
-
-    While the server matured the default was the driver, on the reasoning that
-    a half-finished server which silently became the default would turn every
-    user session into an experiment. What flipped it is four measurements taken
-    on one code state, not the code looking done: `run_e2e.py` 188 passed on
-    BOTH transports; the transport judge 50 green on both with 0 red only on
-    ours; the protocol comparison at parity on methods, parameters, object types,
-    initializer fields, events and parentage; and the realness gates green on
-    this path for the first time.
-
-    ⛔ The assertion is on the DEFAULT, not on the driver being gone. The
-    driver stays reachable by name: it is the only second arm this project has,
-    and two of its gates exist only while there are two.
-    """
-    monkeypatch.delenv(factory.CHOICE_ENV, raising=False)
-    assert factory.chosen() == factory.JUGGLER
-
-
-def test_the_driver_is_still_reachable_by_name(monkeypatch):
-    """⛔ The way back has to keep working, or the flip above is one-way.
-
-    A user whose session behaves differently on the new path must be able to
-    say so and get the old one, and any comparison between the two arms needs it to have
-    a second arm at all.
-    """
-    monkeypatch.setenv(factory.CHOICE_ENV, "driver")
-    assert factory.chosen() == factory.DRIVER
-
 
 def test_the_serializer_TAGS_values_instead_of_sending_them_bare():
     """⛔ Playwright does not send JSON, it sends a tagged union, and
@@ -203,7 +149,6 @@ def test_the_public_API_drives_a_page_WITHOUT_node(firefox_binary, monkeypatch):
     823 generated methods and the sync facade are all working against a
     different object underneath - which is the entire claim of the detachment.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -234,7 +179,6 @@ def test_the_public_API_reads_MANY_elements_without_node(firefox_binary, monkeyp
     thousand matches leaks a thousand nodes. That is a property of the protocol,
     not of this test, and it is written down where the handles are made.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -265,7 +209,6 @@ def test_the_public_API_WAITS_for_an_element_that_arrives_late(firefox_binary, m
     the retry loop: that loop disposes what it resolves on every turn, so it
     would hand back a handle it has just released - and a released handle does
     not raise, it answers wrong. The element below arrives 1 s after the test asks for it."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -316,7 +259,6 @@ def test_going_BACK_then_FORWARD_leaves_the_page_readable(firefox_binary, monkey
     different and still valid reason. The three ways of being green stop looking
     alike.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -362,7 +304,6 @@ def test_going_back_over_a_page_the_script_left_without_a_gesture(firefox_binary
     under load. Playwright's `go_back` is `history.back()`: it goes to the
     previous entry, gesture or not.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -393,7 +334,6 @@ def test_set_content_runs_in_the_MAIN_world_without_node(firefox_binary, monkeyp
     equal to the document's. The fork already fixed this inside the driver; the
     Python server has to get it right for the same reason, not by luck.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     from invisible_playwright import InvisiblePlaywright
     with InvisiblePlaywright(seed=42, binary_path=firefox_binary,
                              headless=True) as browser:
@@ -411,7 +351,6 @@ def test_set_content_runs_in_the_MAIN_world_without_node(firefox_binary, monkeyp
 @pytest.mark.e2e
 def test_the_public_API_selects_and_checks_without_node(firefox_binary, monkeypatch):
     """`select_option` and `check`, through the generated API."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -460,7 +399,6 @@ def test_locators_reach_INSIDE_a_closed_shadow_root(firefox_binary, monkeypatch)
     page does not. This asserts the automation half; the test below asserts
     the half that matters more - that the page gained nothing.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(SHADOW))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -487,7 +425,6 @@ def test_the_PAGE_still_sees_nothing_of_a_closed_root(firefox_binary, monkeypatc
 
     So the assertion is not "automation works" but "the page is unchanged".
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(SHADOW))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -524,7 +461,6 @@ def test_content_SERIALISES_shadow_roots_including_closed_ones(firefox_binary, m
     divergence is real and complete - open, closed, and a root NESTED inside a
     closed one, which is where a depth-one walk would look right and be wrong.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(SHADOW))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -575,7 +511,6 @@ def test_console_messages_reach_the_page_listener(firefox_binary, monkeypatch):
     `params["page"]`. Emitting them on the Page produces no error at all: the
     handler simply never runs, and the user concludes their page prints
     nothing."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(NOISY))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -607,7 +542,6 @@ def test_console_messages_reach_the_page_listener(firefox_binary, monkeypatch):
 def test_an_uncaught_error_reaches_the_pageerror_listener(firefox_binary, monkeypatch):
     """A page that throws must reach `page.on("pageerror")`, with the message
     intact - that is the only way a caller learns the site broke."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(NOISY))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -639,7 +573,6 @@ def test_a_dialog_can_be_ANSWERED_and_not_answering_hangs_the_page(
     that safety net only works if the event ARRIVES - which is what this
     asserts. The second half then checks the explicit path.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(NOISY))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -672,7 +605,6 @@ def test_an_unanswered_dialog_is_dismissed_by_the_client(firefox_binary, monkeyp
     dismisses on its own, and the page keeps running. If the event never
     reached the client, this would hang - so a green here proves the event
     arrives even when nobody visibly consumes it."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(NOISY))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -706,7 +638,6 @@ def test_clearing_cookies_with_a_FILTER_is_refused_not_widened():
 
 @pytest.mark.e2e
 def test_cookies_round_trip_through_the_public_API(firefox_binary, monkeypatch):
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -733,7 +664,6 @@ def test_a_screenshot_comes_back_as_real_png_bytes(firefox_binary, monkeypatch):
     "None" or a base64 blob nobody decoded is still bytes and still non-empty:
     the only assertion that separates a real image from a plausible one is the
     PNG signature."""
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]
@@ -753,7 +683,6 @@ def test_a_screenshot_comes_back_as_real_png_bytes(firefox_binary, monkeypatch):
 
 @pytest.mark.e2e
 def test_the_viewport_can_be_resized(firefox_binary, monkeypatch):
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     srv = LocalServer(("127.0.0.1", 0), _serve(PAGE))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = "http://127.0.0.1:%d/" % srv.server_address[1]

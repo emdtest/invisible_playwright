@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import pytest
 
-from invisible_playwright._juggler import transport as factory
 
 IN_VIEW = "<div id=x style='width:120px;height:40px'>target</div>"
 FAR_BELOW = ("<div style='height:3000px'></div>"
@@ -47,8 +46,7 @@ IS_IN_VIEWPORT = """el => {
                                   INSIDE_A_SCROLLER],
                          ids=["already in view", "3000px below the fold",
                               "400px below the fold", "inside a scroller"])
-def test_scroll_into_view_puts_the_element_in_the_viewport(firefox_binary, html, monkeypatch):
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
+def test_scroll_into_view_puts_the_element_in_the_viewport(firefox_binary, html):
     from invisible_playwright import InvisiblePlaywright
     with InvisiblePlaywright(seed=42, binary_path=firefox_binary,
                              headless=True) as browser:
@@ -76,7 +74,7 @@ CENTRE_OFFSET = """el => {
 
 
 @pytest.mark.e2e
-def test_it_scrolls_ONLY_IF_NEEDED_and_then_centres(firefox_binary, monkeypatch):
+def test_it_scrolls_ONLY_IF_NEEDED_and_then_centres(firefox_binary):
     """What the method does with the page: nothing for an element in full view,
     and centring for one that is not.
 
@@ -92,7 +90,6 @@ def test_it_scrolls_ONLY_IF_NEEDED_and_then_centres(firefox_binary, monkeypatch)
     still centred would move the page in the first half, and one that scrolled
     the minimum would leave it on the bottom edge in the second.
     """
-    monkeypatch.setenv(factory.CHOICE_ENV, factory.JUGGLER)
     from invisible_playwright import InvisiblePlaywright
     with InvisiblePlaywright(seed=42, binary_path=firefox_binary,
                              headless=True) as browser:

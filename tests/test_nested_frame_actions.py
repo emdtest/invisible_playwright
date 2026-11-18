@@ -630,11 +630,9 @@ def _zoomed_session(firefox_binary, profile_dir, *, dpr, humanize, width=3200,
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("dpr,zoom", [(1.25, 1.2), (1, 0.5)])
-def test_zoomed_binary_motion_and_wheel(firefox_binary, nested_origins, tmp_path,
-                                        monkeypatch, dpr, zoom):
-    """The binary cursor's moves and a wheel land on the input under a saved
+def test_zoomed_motion_and_wheel(firefox_binary, nested_origins, tmp_path, dpr, zoom):
+    """The cursor's moves and a wheel land on the input under a saved
     zoom, in and out, combined with a fractional device scale."""
-    monkeypatch.setenv("INVPW_CURSOR_ENGINE", "binary")
     _save_site_zoom(tmp_path, zoom)
     with _zoomed_session(firefox_binary, tmp_path, dpr=dpr, humanize=True) as context:
         page = _timed(context.new_page())

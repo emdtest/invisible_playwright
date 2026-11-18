@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from invisible_core import generate_profile, get_default_stealth_prefs
-from invisible_playwright._cursor import ENGINE_BINARY, ENGINE_PYTHON
+from invisible_playwright._cursor import ENGINE_PYTHON
 from invisible_playwright._session import build_prefs
 
 pytestmark = pytest.mark.unit
@@ -67,38 +67,16 @@ def test_the_wrapper_composes_what_the_public_api_composes():
         f"nothing looks wrong: {differing}")
 
 
-def test_the_binary_engine_still_produces_the_cap_it_always_did():
-    """The delegation must not change what either engine writes.
+def test_the_python_engine_leaves_the_browser_expansion_off():
+    """The delegation must not change what the engine writes.
 
-    ENGINE_BINARY means the browser draws the path, so the pref is on and the
-    cap is written; ENGINE_PYTHON means the wrapper draws it, so the pref is off
-    and no cap is written - both exactly as before the core took the layer.
+    ENGINE_PYTHON means the wrapper draws the path, so the pref is off and no
+    cap is written, whatever `humanize` the caller gave.
     """
     profile = generate_profile(SEED)
-    binary = build_prefs(profile=profile, locale=LOCALE, timezone=TZ,
-                         extra_prefs=None, virtual_display=False,
-                         cursor_engine=ENGINE_BINARY, humanize=2.5)
-    python = build_prefs(profile=profile, locale=LOCALE, timezone=TZ,
-                         extra_prefs=None, virtual_display=False,
-                         cursor_engine=ENGINE_PYTHON, humanize=2.5)
-
-    assert binary["stealthfox.humanize"] is True
-    assert binary["stealthfox.humanize.maxTime"] == "2.5"
-    assert python["stealthfox.humanize"] is False
-    assert "stealthfox.humanize.maxTime" not in python
-
-
-def test_a_zero_cap_with_the_binary_engine_means_the_default_not_off():
-    """The edge the delegation had to be written around.
-
-    `humanize=0` with the binary engine selected is a cap of nothing, not a
-    request to disable motion - `max_seconds_for` has always turned it into the
-    default. Passing `humanize` straight through to the core would have made it
-    falsy and switched the generator off, which is a different browser.
-    """
-    prefs = build_prefs(profile=generate_profile(SEED), locale=LOCALE,
-                        timezone=TZ, extra_prefs=None,
-                        virtual_display=False,
-                        cursor_engine=ENGINE_BINARY, humanize=0)
-    assert prefs["stealthfox.humanize"] is True
-    assert prefs["stealthfox.humanize.maxTime"] == "1.5"
+    for humanize in (True, 2.5, 0):
+        python = build_prefs(profile=profile, locale=LOCALE, timezone=TZ,
+                             extra_prefs=None, virtual_display=False,
+                             cursor_engine=ENGINE_PYTHON, humanize=humanize)
+        assert python["stealthfox.humanize"] is False
+        assert "stealthfox.humanize.maxTime" not in python

@@ -195,7 +195,7 @@ class _Hand:
                  synced: Any) -> None:
         self.seed = int(seed)
         self.max_seconds = float(max_seconds)
-        self._profile = _cursor._build_profile(factory, self.seed, self.max_seconds)
+        self._profile = factory(self.seed)
         self.persona = PointerPersona.from_seed(self.seed)
         self.x: Optional[float] = None
         self.y: Optional[float] = None

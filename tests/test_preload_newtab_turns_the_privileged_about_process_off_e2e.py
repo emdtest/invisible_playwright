@@ -6,7 +6,6 @@ candidate engine, three runs of three). The processes are read from the engine's
 (``Setting remoteType of process <pid> to <type>``): it needs ``MOZ_LOG=Process:5,timestamp,sync`` and a file base before the launch, and it holds
 on every platform. The assertion is on ``privilegedabout`` only: a Mozilla site's process beside it depends on the country of the machine.
 """
-import inspect
 import re
 import time
 
@@ -53,10 +52,6 @@ def test_without_the_option_the_new_tab_page_is_preloaded_in_its_own_process(fir
 
 @pytest.mark.e2e
 def test_asked_to_turn_the_preload_off_there_is_no_privileged_about_process(firefox_binary, tmp_path):
-    from invisible_core import prefs as core_prefs
-
-    if "preload_newtab" not in inspect.signature(core_prefs.compose_session_prefs).parameters:
-        pytest.skip("this core does not know preload_newtab yet")
     types = _remote_types(tmp_path, firefox_binary, bool, window=10, preload_newtab=False)
     assert types, "the engine wrote no line about its processes: the control cannot judge"
     assert "privilegedabout" not in types, "a process of the preloaded New Tab page was born: %s" % sorted(set(types))

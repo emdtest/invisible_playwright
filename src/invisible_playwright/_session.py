@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from ._cursor import (ENGINE_BINARY,
-                      ENGINE_PYTHON,
+from ._cursor import (ENGINE_PYTHON,
                       enable_for as _enable_cursor_engine,
                       max_seconds_for as _cursor_max_seconds)
 from ._engine import resolve_executable
@@ -217,13 +216,9 @@ def build_prefs(
     #
     # What stays here is this path's DELIVERY and its two decisions:
     #
-    #   humanize   The pref selects WHICH generator runs, not whether motion
-    #              happens. While the wrapper draws the path it must be false,
-    #              or every waypoint we send would itself be expanded into a
-    #              path by the browser. `max_seconds_for` is applied HERE rather
-    #              than passing `humanize` through, because a falsy-but-numeric
-    #              cap with the binary engine selected has to mean the default,
-    #              not "off".
+    #   humanize   Always false: the wrapper draws the path, and a true value
+    #              would make the browser expand every waypoint we send into a
+    #              path of its own.
     #   show_cursor  Passed through UNTRANSLATED, and that is the difference
     #              from the line above: `humanize` needs a decision here
     #              because two engines compete for it, while the visible dot
@@ -245,12 +240,10 @@ def build_prefs(
         # workarounds meant for that desktop apply only then. Nothing here
         # reads the platform: the fact travels, not a prediction of it.
         virtual_display=virtual_display,
-        humanize=(_cursor_max_seconds(humanize)
-                  if cursor_engine == ENGINE_BINARY else False),
+        humanize=False,
         show_cursor=show_cursor,
-        # Handed to the core only when asked: a core that does not know the option is never called with it,
-        # so a caller who does not use it cannot meet a TypeError from a pairing with an older core.
-        **({} if preload_newtab is None else {"preload_newtab": preload_newtab}),
+        # None (the caller did not say) writes nothing in the core; False / True are declarations.
+        preload_newtab=preload_newtab,
     ).prefs
     # ⛔ THE TYPING SEED RIDES IN THE PREFS AND NEVER REACHES THE PROFILE.
     #
@@ -277,9 +270,8 @@ def build_prefs(
     # nobody is making.
     #
     # ⛔ AND WHO DRAWS THE WALK TRAVELS TOO (`POINTER_PREF`): with the seed
-    # alone the server could not tell the Python generator from the engine's own
-    # expansion or from `INVPW_CURSOR_ENGINE=off`, and a walk drawn on top of
-    # either would humanise twice.
+    # alone the server could not tell the Python generator from
+    # `INVPW_CURSOR_ENGINE=off`, and would draw a walk nobody asked for.
     #
     # Milliseconds, and an int: Gecko has no float pref type, and `1.0` written
     # as a number arrives with the right value and the wrong type - the defect
