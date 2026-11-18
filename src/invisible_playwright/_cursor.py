@@ -101,37 +101,17 @@ def _reset_warnings() -> None:
 #         it, since a cursor that is at the top-left corner at the start of
 #         every session is an invariant shared by every install.
 #
-# Without it there is "no generator available": the pointer stays inert and the
-# session's clicks and moves go out plain.
-try:  # pragma: no cover - exercised by the import-failure test via monkeypatch
-    # The package that publishes the generator: `_motion_factory` looks the
-    # factory up on it by name, and the tests put a stub module here.
-    from invisible_core import juggler as _motion_mod  # type: ignore[attr-defined]
-except Exception as _motion_exc:  # noqa: BLE001 - a broken generator must not break launching
-    _motion_mod = None  # type: ignore[assignment]
-    _MOTION_IMPORT_ERROR: Optional[BaseException] = _motion_exc
-else:
-    _MOTION_IMPORT_ERROR = None
+# The core is pinned with `==`, so the generator is always there: the import is
+# direct, and an install without it fails here, at import.
+#
+# The package that publishes the generator: `_motion_factory` reads it from here,
+# and the tests put a stub module in its place.
+from invisible_core import juggler as _motion_mod
 
 
-def _motion_factory() -> Optional[Callable[..., Any]]:
-    """Return the callable that builds a per-page stroke generator, or None."""
-    factory = getattr(_motion_mod, "CursorMotion", None)
-    if callable(factory):
-        return factory
-    detail = (
-        f" ({type(_MOTION_IMPORT_ERROR).__name__}: {_MOTION_IMPORT_ERROR})"
-        if _MOTION_IMPORT_ERROR is not None
-        else ""
-    )
-    _warn_once(
-        "no-motion",
-        "no cursor motion generator found "
-        "(invisible_core.juggler.CursorMotion)" + detail + "; the pointer "
-        "is not humanised in this process. This is a broken install, not a "
-        "configuration.",
-    )
-    return None
+def _motion_factory() -> Callable[..., Any]:
+    """The callable that builds a per-page stroke generator."""
+    return _motion_mod.CursorMotion
 
 
 def resolve_cursor_engine(humanize: Any) -> str:
@@ -141,11 +121,19 @@ def resolve_cursor_engine(humanize: Any) -> str:
     constructor: falsy disables humanisation, ``True`` enables it with the
     default cap, a number enables it with that cap in seconds. This function
     only decides WHETHER the Python generator draws it or nobody does.
+
+    ``INVPW_CURSOR_ENGINE`` is strict: unset or empty (the default), ``python``
+    or ``off``. Any other value is a ``ValueError`` naming the valid ones, even
+    when ``humanize`` is falsy: a value that is ignored is a setting that does
+    nothing while the caller believes it does something.
     """
-    if not humanize:
-        return ENGINE_OFF
-    choice = (os.environ.get(ENGINE_ENV) or "").strip().lower()
-    if choice in (ENGINE_OFF, "none", "false", "0"):
+    choice = os.environ.get(ENGINE_ENV, "")
+    if choice not in ("", ENGINE_PYTHON, ENGINE_OFF):
+        raise ValueError(
+            "invisible_playwright: %s=%r is not a cursor engine; the valid values "
+            "are %r (the default, same as unset), %r and %r"
+            % (ENGINE_ENV, choice, "", ENGINE_PYTHON, ENGINE_OFF))
+    if not humanize or choice == ENGINE_OFF:
         return ENGINE_OFF
     return ENGINE_PYTHON
 
@@ -222,8 +210,6 @@ def enable_for(owner: Any, *, seed: int, max_seconds: float) -> bool:
     session up lazily through its own context and browser.
     """
     if not _ensure_patched():
-        return False
-    if _motion_factory() is None:
         return False
     try:
         _SESSIONS[_impl(owner)] = {"seed": int(seed), "max_seconds": float(max_seconds)}

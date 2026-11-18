@@ -91,12 +91,6 @@ def stub_motion(monkeypatch):
     return _StubMotionModule
 
 
-@pytest.fixture
-def no_motion(monkeypatch):
-    monkeypatch.setattr(_cursor, "_motion_mod", None)
-    monkeypatch.delenv(_cursor.ENGINE_ENV, raising=False)
-
-
 class _FakeBrowser:
     pass
 
@@ -147,13 +141,28 @@ def test_humanize_float_still_means_a_cap_in_seconds(stub_motion):
 
 
 @pytest.mark.unit
-def test_a_value_that_is_not_off_is_the_python_engine(stub_motion, monkeypatch):
-    """`binary` was a third engine until it was removed: the value now reads as
-    any other unrecognised one, and the browser's own expansion stays off."""
-    monkeypatch.setenv(_cursor.ENGINE_ENV, "binary")
-    ip = InvisiblePlaywright(timezone="America/New_York", seed=42, humanize=3.0)
-    assert ip._cursor_engine == _cursor.ENGINE_PYTHON
-    prefs = ip._build_prefs()
+@pytest.mark.parametrize("value", ["binary", "juggler", "none", "false", "0", "wrapper", "Python", "OFF", " off", "x"])
+@pytest.mark.parametrize("humanize", [True, False])
+def test_a_value_that_is_not_a_cursor_engine_is_refused(stub_motion, monkeypatch, value, humanize):
+    """Strict, with no aliases: `binary` was a third engine until it was removed,
+    and a value that is read as something else - or ignored - is a setting that
+    does nothing while the caller believes it does something."""
+    monkeypatch.setenv(_cursor.ENGINE_ENV, value)
+    with pytest.raises(ValueError) as caught:
+        InvisiblePlaywright(timezone="America/New_York", seed=42, humanize=humanize)
+    message = str(caught.value)
+    assert _cursor.ENGINE_ENV in message and repr(value) in message
+    for valid in ("''", "'python'", "'off'"):
+        assert valid in message
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value, engine", [("", "python"), ("python", "python"), ("off", "off")])
+def test_the_valid_values_of_the_engine_variable(stub_motion, monkeypatch, value, engine):
+    monkeypatch.setenv(_cursor.ENGINE_ENV, value)
+    assert _cursor.resolve_cursor_engine(True) == engine
+    assert _cursor.resolve_cursor_engine(False) == _cursor.ENGINE_OFF
+    prefs = InvisiblePlaywright(timezone="America/New_York", seed=42, humanize=3.0)._build_prefs()
     assert prefs["stealthfox.humanize"] is False
     assert "stealthfox.humanize.maxTime" not in prefs
 
@@ -195,18 +204,6 @@ def test_the_dot_and_the_motion_are_two_switches(stub_motion):
                                 show_cursor=True)._build_prefs()
     assert prefs["stealthfox.humanize"] is False
     assert prefs["stealthfox.showcursor"] is True
-
-
-@pytest.mark.unit
-def test_missing_generator_leaves_the_pointer_inert_and_says_so(no_motion):
-    """No generator is a broken install: the engine is still the Python one,
-    the browser's expansion stays off, and the pointer does nothing - with one
-    warning, not a quiet fallback to a third path."""
-    ip = InvisiblePlaywright(timezone="America/New_York", seed=42, humanize=True)
-    assert ip._cursor_engine == _cursor.ENGINE_PYTHON
-    assert ip._build_prefs()["stealthfox.humanize"] is False
-    with pytest.warns(RuntimeWarning, match="no cursor motion generator"):
-        assert not make_pointer(seed=5, max_seconds=1.0)[1].active
 
 
 @pytest.mark.unit

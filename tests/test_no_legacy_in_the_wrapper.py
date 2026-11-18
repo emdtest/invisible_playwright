@@ -56,28 +56,33 @@ def test_the_cursor_module_has_one_generator_and_two_engines():
     assert "ENGINE_BINARY" not in _cursor.__all__
 
 
-def test_the_generator_is_asked_only_by_its_own_name():
+def test_the_generator_is_imported_directly_and_has_no_fallback():
+    """The core is pinned with `==`: an install without the generator fails at import."""
+    import ast
+
     from invisible_playwright import _cursor
 
-    class OnlyOldNames:
-        MotionProfile = staticmethod(lambda seed, max_seconds: None)
-        new_motion = staticmethod(lambda *a, **k: None)
+    source = pathlib.Path(_cursor.__file__).read_text(encoding="utf-8")
+    assert "_MOTION_IMPORT_ERROR" not in source
+    assert "no-motion" not in source
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Try):
+            text = ast.get_source_segment(source, node) or ""
+            assert "invisible_core" not in text, "the import of the generator is guarded again"
+    for name in ("MotionProfile", "new_motion"):
+        assert name not in source
+    import invisible_core.juggler as core_juggler
+    assert _cursor._motion_mod is core_juggler
+    assert _cursor._motion_factory() is core_juggler.CursorMotion
 
-    saved = _cursor._motion_mod
-    _cursor._motion_mod = OnlyOldNames
-    try:
-        with pytest.warns(RuntimeWarning, match="no cursor motion generator"):
-            assert _cursor._motion_factory() is None
-    finally:
-        _cursor._motion_mod = saved
-        _cursor._reset_warnings()
 
-
-def test_the_engine_variable_has_no_binary_value(monkeypatch):
+@pytest.mark.parametrize("value", ["binary", "juggler", "none", "false", "0"])
+def test_the_engine_variable_takes_no_alias(monkeypatch, value):
     from invisible_playwright import _cursor
 
-    monkeypatch.setenv(_cursor.ENGINE_ENV, "binary")
-    assert _cursor.resolve_cursor_engine(True) == _cursor.ENGINE_PYTHON
+    monkeypatch.setenv(_cursor.ENGINE_ENV, value)
+    with pytest.raises(ValueError, match="python"):
+        _cursor.resolve_cursor_engine(True)
 
 
 def test_the_session_module_does_not_know_a_third_engine():

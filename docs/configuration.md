@@ -75,7 +75,7 @@ row is for a specific situation.
 | `INVISIBLE_PLAYWRIGHT_ENGINE_DIR` | Keep the engine apart from the state, for example on a read-only disk built once per release: `invisible-playwright fetch` with it set fills it, and a launch only reads it. The cache directory must still be writable |
 | `STEALTHFOX_GITHUB_TOKEN` | A rate-limited or corporate network that refuses anonymous GitHub downloads |
 | `INVISIBLE_PLAYWRIGHT_SKEW=allow` | Run a Playwright version outside the tested range anyway |
-| `INVPW_CURSOR_ENGINE` | `python` (default) or `off` |
+| `INVPW_CURSOR_ENGINE` | `python` (default, same as unset) or `off`. Any other value stops the launch with an error that lists these two |
 | `INVISIBLE_DOWNLOAD_DEADLINE` | Seconds allowed for one engine download, default `1800`. Raise it on a very slow link; `0` removes the bound |
 
 A binary you already have is not an environment variable: pass it as

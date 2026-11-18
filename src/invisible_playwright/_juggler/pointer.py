@@ -332,8 +332,6 @@ class Pointer:
         if not draws or session_seed is None or not budget_s:
             return
         factory = _cursor._motion_factory()
-        if factory is None:
-            return
         seed = _cursor.page_motion_seed(session_seed, number)
         try:
             self.hand = _Hand(seed, budget_s, factory,
