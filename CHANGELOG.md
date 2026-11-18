@@ -4,7 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.55.0] - 2026-11-18
+
+### Removed
+- The nine modules that only re-exported `invisible_core` (`invisible_playwright._geo`, `_headless`, `_proxy`, `_webgl_personas`, `config`,
+  `constants`, `download`, `prefs`, `_fpforge`) and `invisible_playwright._reaper`: import `invisible_core.<module>` (`invisible_core.process`
+  for the reaper). `resolve_session_timezone` is no longer re-exported from the package root.
+- `INVPW_CURSOR_ENGINE=binary` and the fallback to the browser's own motion when no generator is found: the engine is the Python one, or `off`. The variable is strict: unset, `python` or `off`; any other value (`binary`, `none`, `false`, `0`...) is a `ValueError` that lists them.
+- The test that scanned a driver bundle tree, which only the removed Node driver had.
+- `INVPW_TRANSPORT=driver` and its refusal message: there is one transport.
+
+### Fixed
+- The documentation no longer presents `INVPW_BINARY_PATH` as a variable of the library, which reads none; a binary you already have is passed
+  as `binary_path=`.
 
 ## [0.54.0] - 2026-11-18
 

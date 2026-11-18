@@ -16,7 +16,7 @@ from invisible_core import SessionLocale, persona_cookies, prepare_session_geo, 
 from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
 from invisible_core._offloop import off_the_loop
-from ._reaper import SessionToken, guard_for
+from invisible_core.process import SessionToken, guard_for
 from ._juggler._reaped import final_reap
 
 
@@ -54,8 +54,8 @@ class InvisiblePlaywright(_session.CommonLaunch):
         self._extra_args = list(extra_args or [])
         self._humanize = humanize
         # See the sync launcher: who draws the cursor path (this package by
-        # default, the browser under INVPW_CURSOR_ENGINE=binary, nobody when
-        # humanize is falsy). Decided here because the prefs depend on it.
+        # default, nobody when humanize is falsy or INVPW_CURSOR_ENGINE=off).
+        # Decided here because the prefs depend on it.
         self._cursor_engine = resolve_cursor_engine(humanize)
         # See the sync launcher: independent of `humanize`, deliberately.
         # ⛔ NOT `bool(...)`: that would collapse None - "the caller did not

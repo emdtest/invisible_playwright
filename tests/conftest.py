@@ -127,8 +127,8 @@ def pytest_unconfigure(config):
 # is a clear message about one test rather than a collection error covering the
 # whole run.
 try:
-    from invisible_playwright._fpforge import generate_profile
-    from invisible_playwright.constants import BINARY_ENTRY_REL
+    from invisible_core._fpforge import generate_profile
+    from invisible_core.constants import BINARY_ENTRY_REL
     _IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - only in the e2e-only environment
     generate_profile = None
@@ -258,7 +258,7 @@ def firefox_binary():
 
       1. ``INVPW_BINARY_PATH`` env var - point the whole suite at a local build
          or a freshly-extracted release (this is how the full-suite gate runs).
-      2. Cached binary under ``cache_dir_for_version()`` (post ``fetch``).
+      2. Cached binary under ``cache_dir_for_seal()`` (post ``fetch``).
       3. Skip - we never trigger an implicit multi-hundred-MB network download
          inside a test run.
     """
@@ -274,8 +274,8 @@ def firefox_binary():
     _require_package()
     if sys.platform not in BINARY_ENTRY_REL:
         pytest.skip(f"unsupported platform: {sys.platform}")
-    from invisible_playwright.download import cache_dir_for_version
-    entry = cache_dir_for_version() / BINARY_ENTRY_REL[sys.platform]
+    from invisible_core.download import cache_dir_for_seal
+    entry = cache_dir_for_seal() / BINARY_ENTRY_REL[sys.platform]
     if not entry.exists():
         pytest.skip(
             "patched Firefox binary not cached and INVPW_BINARY_PATH unset; "

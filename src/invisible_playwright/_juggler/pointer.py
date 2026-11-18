@@ -195,7 +195,7 @@ class _Hand:
                  synced: Any) -> None:
         self.seed = int(seed)
         self.max_seconds = float(max_seconds)
-        self._profile = _cursor._build_profile(factory, self.seed, self.max_seconds)
+        self._profile = factory(self.seed)
         self.persona = PointerPersona.from_seed(self.seed)
         self.x: Optional[float] = None
         self.y: Optional[float] = None
@@ -332,8 +332,6 @@ class Pointer:
         if not draws or session_seed is None or not budget_s:
             return
         factory = _cursor._motion_factory()
-        if factory is None:
-            return
         seed = _cursor.page_motion_seed(session_seed, number)
         try:
             self.hand = _Hand(seed, budget_s, factory,

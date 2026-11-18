@@ -13,7 +13,7 @@ from invisible_core._fpforge import Profile, generate_profile
 from invisible_core import SessionLocale, persona_cookies, prepare_session_geo, record_session_seed, resolve_session_seed
 from ._engine import assert_wire_version, resolve_executable
 from invisible_core import configure_proxy as _configure_proxy_shared
-from ._reaper import SessionToken, guard_for
+from invisible_core.process import SessionToken, guard_for
 from ._juggler._reaped import final_reap
 
 
@@ -126,8 +126,7 @@ class InvisiblePlaywright(_session.CommonLaunch):
                 call. Default ``True`` (~1.5 s cap per movement); ``False``
                 disables; a float caps a movement in seconds. The path is
                 drawn from ``seed``, so the same seed replays the same motion.
-                Set ``INVPW_CURSOR_ENGINE=binary`` to go back to letting the
-                browser draw it, or ``=off`` to disable motion process-wide.
+                Set ``INVPW_CURSOR_ENGINE=off`` to disable motion process-wide.
             locale: BCP-47 tag (e.g. ``"en-US"``) or ``"auto"`` (default).
                 ``"auto"`` derives the locale from the egress country - the proxy
                 egress IP, or the host's public IP without a proxy - exactly like
@@ -201,9 +200,8 @@ class InvisiblePlaywright(_session.CommonLaunch):
         self._udp_stun_servers = _session.udp_stun_list(udp_stun_servers)
         self._extra_args = list(extra_args or [])
         self._humanize = humanize
-        # Who draws the cursor path: this package (default), the browser
-        # (``INVPW_CURSOR_ENGINE=binary``, the way back for anyone depending on
-        # the old behaviour), or nobody (``humanize=False``). Resolved once,
+        # Who draws the cursor path: this package (default), or nobody
+        # (``humanize=False`` or ``INVPW_CURSOR_ENGINE=off``). Resolved once,
         # here, because the prefs handed to the browser depend on the answer.
         self._cursor_engine = resolve_cursor_engine(humanize)
         # ⛔ Stored raw and NOT folded into `_cursor_engine`. The two are

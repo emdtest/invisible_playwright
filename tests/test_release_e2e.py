@@ -214,7 +214,7 @@ def _upstream_version(py: Path) -> str:
     # `PYTHONPATH` redirects to the workbench sources.
     out = subprocess.run(
         [str(py), "-c",
-         "from invisible_playwright.constants import FIREFOX_UPSTREAM_VERSION as v; print(v)"],
+         "from invisible_core.constants import FIREFOX_UPSTREAM_VERSION as v; print(v)"],
         capture_output=True, text=True, timeout=60, env=_clean_env()[0])
     assert out.returncode == 0, (
         "could not read FIREFOX_UPSTREAM_VERSION from the installed package: "
@@ -491,7 +491,7 @@ def test_binary_executes_after_fetch(clean_venv: Path, isolated_cache_env: dict)
     """After fetch, the binary cache contains a launchable Firefox."""
     out = _run(
         [str(clean_venv), "-c",
-         "from invisible_playwright.download import ensure_binary; "
+         "from invisible_core.download import ensure_binary; "
          "p = ensure_binary(); print('BINARY', p)"],
         env=isolated_cache_env,
         timeout=60,

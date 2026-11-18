@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "invisible_playwright"
-version = "0.54.0"
+version = "0.55.0"
 description = "Playwright wrapper for a patched Firefox with deterministic stealth profile."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -240,13 +240,10 @@ release_tags = ["v"]
 # client in 0.30.0, and its exclusion with it.) `test_fork.py` carries Italian ON
 # PURPOSE - its known-bad fixture reproduces a JavaScript comment whose defect
 # IS the trailing apostrophe of an Italian word; translate it and the mutation
-# stops reproducing the bug; the test that scans a driver bundle for that defect
-# (`test_the_driver_bundle_tree_has_balanced_quotes.py`) quotes the same two words
-# in its account of it. Named file by file, never by folder: an
+# stops reproducing the bug. Named file by file, never by folder: an
 # exclusion that names nothing is refused by the gate.
 [tool.invisible.english]
 excluded = [
     "tests/test_fork.py",
-    "tests/test_the_driver_bundle_tree_has_balanced_quotes.py",
 ]
 marker = "MODIFIED by invisible_playwright"

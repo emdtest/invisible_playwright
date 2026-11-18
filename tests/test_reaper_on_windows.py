@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from invisible_playwright import _reaper
+from invisible_core import process as core_process
 
 from test_reaper import _SLEEP, _reap_all
 
@@ -40,8 +40,8 @@ def test_the_tree_dies_when_this_process_is_KILLED_not_merely_closed():
         [sys.executable, "-c",
          "import subprocess,sys,time;"
          "sys.path.insert(0, r'" + os.path.dirname(os.path.dirname(
-             os.path.abspath(_reaper.__file__))) + "');"
-         "from invisible_playwright._reaper import SessionToken, guard_for;"
+             os.path.abspath(core_process.__file__))) + "');"
+         "from invisible_core.process import SessionToken, guard_for;"
          "tok=SessionToken.mint();"
          "env=tok.stamp(__import__('os').environ);"
          f"kid=subprocess.Popen([sys.executable,'-c','import time; time.sleep({_SLEEP})'],env=env);"

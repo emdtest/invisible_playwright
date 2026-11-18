@@ -34,14 +34,13 @@ MARKER = "not slow and not e2e"
 #: candidate; every one has its own file, with the reason in its name, so that what is left in the rows is what runs on every machine.
 ENVIRONMENT_FILES = {
     "tests/test_version_is_not_taken.py": "asks the package index (a network call); the version job of tests.yml runs it with IPW_CHECK_VERSION",
-    "tests/test_the_driver_bundle_tree_has_balanced_quotes.py": "needs a driver bundle tree (INVPW_DRIVER_TREE), which this checkout does not have",
     "tests/test_the_working_clone_has_the_workbench_next_to_it.py": "needs the workbench of the person who runs it next to the checkout",
     "tests/test_a_bundled_stock_firefox_is_refused_by_binary_path.py": "needs a stock Firefox bundled with Playwright in the cache of the user",
     "tests/test_the_working_clone_has_its_hooks_armed.py": "needs a clone with core.hooksPath armed, which a fresh checkout never has",
     "tests/test_the_working_clone_has_main_to_compare_the_debt.py": "needs origin/main in the checkout, which the job of the candidate does not fetch",
 }
 #: Changed by hand, together with the list above: a file of the environment is a hole in what the candidate runs, and it may not be added in silence.
-ENVIRONMENT_COUNT = 6
+ENVIRONMENT_COUNT = 5
 
 #: The files that skip on the other system, and the only row that names each.
 ONE_SYSTEM = {

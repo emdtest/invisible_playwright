@@ -83,7 +83,7 @@ def _moz_windows_on(desktop_name, session):
     import ctypes
     from ctypes import wintypes
 
-    from invisible_playwright._reaper import find_processes
+    from invisible_core.process import find_processes
 
     mine = {p.pid for p in find_processes(session._session_token)}
     assert mine, "the session's token matches no process, so nothing could be counted"

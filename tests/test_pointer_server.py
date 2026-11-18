@@ -418,15 +418,9 @@ def test_another_seed_or_another_page_walks_differently(clock):
 def test_the_motion_seed_is_the_pages_own(clock, monkeypatch):
     """One derivation for the session seed and the page number, the client's
     (`_cursor.page_motion_seed`)."""
-    seen = []
-    real = _cursor._build_profile
-
-    def spy(factory, seed, max_seconds):
-        seen.append((seed, max_seconds))
-        return real(factory, seed, max_seconds)
-    monkeypatch.setattr(_cursor, "_build_profile", spy)
-    build_page(clock, _boxes_of("x"), seed=4242, number=3, budget=0.75)
-    assert seen == [(_cursor.page_motion_seed(4242, 3), 0.75)]
+    page = build_page(clock, _boxes_of("x"), seed=4242, number=3, budget=0.75)
+    assert page.pointer.hand._profile.seed == _cursor.page_motion_seed(4242, 3)
+    assert page.pointer.hand.max_seconds == 0.75
 
 
 def test_the_budget_caps_the_whole_walk(clock):
