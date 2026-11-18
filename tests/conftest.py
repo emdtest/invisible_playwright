@@ -128,11 +128,11 @@ def pytest_unconfigure(config):
 # whole run.
 try:
     from invisible_core._fpforge import generate_profile
-    from invisible_core.constants import BINARY_ENTRY_REL
+    from invisible_core.seal import DEFAULT_ENTRY_REL
     _IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - only in the e2e-only environment
     generate_profile = None
-    BINARY_ENTRY_REL = None
+    DEFAULT_ENTRY_REL = None
     _IMPORT_ERROR = exc
 
 
@@ -272,10 +272,10 @@ def firefox_binary():
     # `in None` answered a TypeError that hid the reason - measured 2026-10-25
     # with a core whose version the wrapper's pin did not name.
     _require_package()
-    if sys.platform not in BINARY_ENTRY_REL:
+    if sys.platform not in DEFAULT_ENTRY_REL:
         pytest.skip(f"unsupported platform: {sys.platform}")
     from invisible_core.download import cache_dir_for_seal
-    entry = cache_dir_for_seal() / BINARY_ENTRY_REL[sys.platform]
+    entry = cache_dir_for_seal() / DEFAULT_ENTRY_REL[sys.platform]
     if not entry.exists():
         pytest.skip(
             "patched Firefox binary not cached and INVPW_BINARY_PATH unset; "

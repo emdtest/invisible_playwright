@@ -118,3 +118,98 @@ def test_the_wrapper_names_the_core_by_the_names_it_has():
     assert callable(core.ensure_geoip_mmdb)
     assert callable(importlib.import_module("invisible_core.download").cache_dir_for_seal)
     assert callable(importlib.import_module("invisible_core.process").guard_for)
+
+
+#: Names the core 66.76.0 took out. A wrapper file that still imports one of them
+#: imports fine against the core it is pinned to and breaks on the next one: this
+#: is how `tests/conftest.py` kept `BINARY_ENTRY_REL` and turned the core's
+#: `wrapper-on-this-core` job red on every e2e fixture.
+_NAMES_THE_CORE_REMOVED = frozenset({
+    "BINARY_ENTRY_REL", "tz_env", "BROKEN_VERSIONS", "cache_dir_for_version",
+    "resolve_session_timezone", "_parse_checksums",
+})
+#: Names that are only gone from one module of the core (the root still has them).
+_GONE_FROM_DOWNLOAD = frozenset({"geoip_mmdb_path", "ensure_geoip_mmdb"})
+
+
+def _imports_of_removed_core_names(tree):
+    """Every import, and every `module.name` access, of a name the core removed."""
+    import ast
+
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name in _NAMES_THE_CORE_REMOVED:
+                    found.append((node.lineno, "from %s import %s" % (module, alias.name)))
+                if module == "invisible_core.download" and alias.name in _GONE_FROM_DOWNLOAD:
+                    found.append((node.lineno, "from invisible_core.download import %s" % alias.name))
+                if module == "invisible_core" and alias.name == "_pin":
+                    found.append((node.lineno, "from invisible_core import _pin"))
+            if module == "invisible_core._pin":
+                found.append((node.lineno, "from invisible_core._pin import ..."))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "invisible_core._pin":
+                    found.append((node.lineno, "import invisible_core._pin"))
+        elif isinstance(node, ast.Attribute):
+            if node.attr in _NAMES_THE_CORE_REMOVED:
+                found.append((node.lineno, "." + node.attr))
+            elif (node.attr in _GONE_FROM_DOWNLOAD and isinstance(node.value, ast.Name)
+                  and node.value.id == "download"):
+                found.append((node.lineno, "download." + node.attr))
+    return found
+
+
+def test_no_file_of_the_wrapper_imports_a_name_the_core_removed():
+    """Source, tests, scripts and CI helpers alike: the tests are where it hid."""
+    import ast
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    offenders = []
+    for top in ("src", "tests", "scripts", "ci", "examples"):
+        base = root / top
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            offenders += ["%s:%d %s" % (path.relative_to(root), line, what)
+                          for line, what in _imports_of_removed_core_names(tree)]
+    assert not offenders, (
+        "these names are not in invisible-core 66.76.0; import them from where "
+        "the core keeps them now: %s" % offenders)
+
+
+@pytest.mark.parametrize("source", [
+    "from invisible_core.constants import BINARY_ENTRY_REL",
+    "from invisible_core import tz_env",
+    "from invisible_core.constants import BROKEN_VERSIONS",
+    "from invisible_core.download import cache_dir_for_version",
+    "from invisible_core import resolve_session_timezone",
+    "import invisible_core._pin",
+    "from invisible_core import _pin",
+    "from invisible_core._pin import report",
+    "from invisible_core.download import geoip_mmdb_path",
+    "import invisible_core.constants as c\nc.BINARY_ENTRY_REL",
+    "download.geoip_mmdb_path()",
+    "x._parse_checksums(text)",
+])
+def test_the_scan_for_removed_core_names_catches_each_known_bad_import(source):
+    import ast
+
+    assert _imports_of_removed_core_names(ast.parse(source)), source
+
+
+@pytest.mark.parametrize("source", [
+    "from invisible_core.seal import DEFAULT_ENTRY_REL",
+    "from invisible_core import ensure_geoip_mmdb",
+    "from invisible_core.download import cache_dir_for_seal",
+    "from invisible_core import pin",
+])
+def test_the_scan_for_removed_core_names_leaves_the_names_the_core_has(source):
+    import ast
+
+    assert not _imports_of_removed_core_names(ast.parse(source)), source
