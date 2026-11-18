@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.54.0] - 2026-11-17
+## [0.54.0] - 2026-11-18
 
 ### Engine firefox-66
 - A screenshot on Linux draws text in the fonts the page used. The browser's main process rebuilds each font of a screenshot from its
