@@ -213,3 +213,25 @@ def test_the_scan_for_removed_core_names_leaves_the_names_the_core_has(source):
     import ast
 
     assert not _imports_of_removed_core_names(ast.parse(source)), source
+
+
+def test_no_stub_script_of_the_wrapper_imports_the_removed_pin_alias():
+    """The AST scan does not read inside a string, and `tests/test_seal_floor.py`
+    runs a stub core in a subprocess whose code is one: it imported the `_pin`
+    alias the core 66.76.0 removed, and only the pre-push run of the release
+    branch said so. A line of source text that imports it is refused too."""
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    here = pathlib.Path(__file__).resolve()
+    pattern = re.compile(r"(?m)^\s*(?:from\s+invisible_core\s+import\s+_pin\b|"
+                         r"(?:from|import)\s+invisible_core\._pin\b)")
+    offenders = []
+    for top in ("src", "tests", "scripts", "ci", "examples"):
+        for path in sorted((root / top).rglob("*.py")) if (root / top).is_dir() else []:
+            if path.resolve() == here or "__pycache__" in path.parts:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.match(line):
+                    offenders.append("%s:%d" % (path.relative_to(root), number))
+    assert not offenders, offenders
