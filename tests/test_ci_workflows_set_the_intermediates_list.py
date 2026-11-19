@@ -1,7 +1,7 @@
 """The workflows that run the wrapper's tests launch with the intermediates list of ci/intermediates.json, so the core asks Mozilla for nothing.
 
 Without STEALTHFOX_INTERMEDIATES the core downloads Mozilla's intermediates list on a cold cache (`invisible_playwright fetch` and the first launch) and checks
-it once a week. tests.yml and e2e.yml (its Linux run and its Windows parts) set the variable (scripts/ci_lab_intermediates.py set) ONCE, before the step that
+it once a week. tests.yml and e2e.yml (its Linux run, its Windows parts and the Windows job of Control+A) set the variable (scripts/ci_lab_intermediates.py set) ONCE, before the step that
 runs pytest and, where the leg has one, before the step that fetches the engine (`fetch` makes the list present, so it would be the first to download).
 user-install.yml proves the installation a user gets and is left as it is.
 """
@@ -18,11 +18,13 @@ RUNS_PYTEST = {
     "tests.yml": "      - name: Run pytest\n",
     "e2e.yml": "      - name: Run the full e2e suite under a virtual display, without the root ones\n",
     "e2e.yml#windows": "      - name: Run this part of the e2e\n",
+    "e2e.yml#control-a": "      - name: The keyboard shortcut selects all",
 }
 
 
 def _scope(name):
-    """The text of one workflow, or of one leg of it: `e2e.yml` is its Linux job, `e2e.yml#windows` its Windows parts."""
+    """The text of one workflow, or of one leg of it: `e2e.yml` is its Linux job, `e2e.yml#windows` its Windows parts, `e2e.yml#control-a` the
+    Windows job of the keyboard shortcut (it fetches and launches too)."""
     file, _, leg = name.partition("#")
     text = (WORKFLOWS / file).read_text(encoding="utf-8")
     if file != "e2e.yml":
@@ -30,6 +32,9 @@ def _scope(name):
     windows = text.index("\n  e2e-windows:\n")
     if leg == "windows":
         return text[windows:]
+    if leg == "control-a":
+        start = text.index("\n  e2e-windows-control-a:\n")
+        return text[start:windows] if start < windows else text[start:]
     ends = [i for i in (text.find("\n  e2e-windows-control-a:\n"), windows) if i >= 0]
     return text[:min(ends)]
 
@@ -42,7 +47,7 @@ def test_the_list_is_set_once_before_the_step_that_runs_the_tests(name, pytest_s
     assert text.index(SET) < text.index(pytest_step), "%s sets the list after the tests started" % name
 
 
-@pytest.mark.parametrize("name", ["e2e.yml", "e2e.yml#windows"])
+@pytest.mark.parametrize("name", ["e2e.yml", "e2e.yml#windows", "e2e.yml#control-a"])
 def test_the_list_is_set_before_the_engine_is_fetched(name):
     text = _scope(name)
     assert FETCH in text, "the fetch step of %s moved: update this test with it" % name
