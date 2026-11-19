@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.56.0] - 2026-11-19
+
+### Engine firefox-67
+- A site that sends an incomplete certificate chain (its certificate without the intermediate that signed it) opens from the first second,
+  as it does on a Firefox that has been in use for days. Firefox completes such chains with the intermediate certificates Mozilla
+  publishes, which a fresh profile only downloads a minute or so after its start; the list is now declared by the core and written into
+  the profile before the first page, so every session has it from its start.
+- The engine no longer downloads that list itself: no request for it leaves the browser, through the proxy or otherwise.
+- The browser tells the client it is ready only once the list is written, so no page can be opened before it is in place.
+
+### Changed
+- Pins invisible-core 67.77.0 and with it the engine firefox-67. The core downloads the list from Mozilla's service once, verifies every
+  certificate against the hash Mozilla publishes for it, keeps it in its cache and asks again at most once a week, after the browser has
+  started, so a launch never waits for it; with no copy and no network the browser starts without the list and a warning is printed.
+- `invisible-playwright fetch` also downloads the list, after the engine, so the first launch does not.
+- The CI legs launch with a fixed, empty list of the repository (`ci/intermediates.json`), so no test asks Mozilla for anything.
+
 ## [0.55.0] - 2026-11-19
 
 ### Changed
