@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.55.0] - 2026-11-18
+## [0.55.0] - 2026-11-19
+
+### Changed
+- Pins invisible-core 66.76.0 (same engine, firefox-66): the core no longer carries its legacy API, and the wrapper no longer reaches any of it.
+- `tests/conftest.py` takes the engine entry table from `invisible_core.seal.DEFAULT_ENTRY_REL`, and a test fails if a file of the wrapper imports a name the core removed.
+- The workflows arm the pre-push gates with `python -m invisible_core.hooks install`.
 
 ### Removed
 - The nine modules that only re-exported `invisible_core` (`invisible_playwright._geo`, `_headless`, `_proxy`, `_webgl_personas`, `config`,
@@ -13,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `INVPW_CURSOR_ENGINE=binary` and the fallback to the browser's own motion when no generator is found: the engine is the Python one, or `off`. The variable is strict: unset, `python` or `off`; any other value (`binary`, `none`, `false`, `0`...) is a `ValueError` that lists them.
 - The test that scanned a driver bundle tree, which only the removed Node driver had.
 - `INVPW_TRANSPORT=driver` and its refusal message: there is one transport.
+- `scripts/install_hooks.py`: `python -m invisible_core.hooks install` (with `--check` to only report) does the same, from the core.
 
 ### Fixed
 - The documentation no longer presents `INVPW_BINARY_PATH` as a variable of the library, which reads none; a binary you already have is passed
