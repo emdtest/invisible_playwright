@@ -273,8 +273,8 @@ compare-against-a-real-browser method these checks sit inside.
 
 ## Sources
 
-- The public leak and fingerprint pages read from their own output, including BrowserLeaks
-  for per-surface values and CreepJS for how a suppressed signal is recorded rather than
+- The public leak and fingerprint pages read from their own output, including a site that shows your IP and WebRTC candidates
+  for per-surface values and a fingerprint test page for how a suppressed signal is recorded rather than
   ignored.
 - Playwright's documented [proxy configuration](https://playwright.dev/python/docs/network)
   and `page.evaluate`, used unchanged.
