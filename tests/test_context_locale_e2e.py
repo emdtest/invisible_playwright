@@ -193,32 +193,38 @@ def _wait_for(condition, page):
     return wait_until(condition, 30, lambda: page.wait_for_timeout(100))
 
 
+def _engine_side(context):
+    """The browser dispatcher (with the engine connection, ``.conn``) and the context dispatcher of the in-process server that answers
+    this context: the command a client sends for a context's language is sent here by hand, after the pages exist."""
+    impl = context._impl_obj
+    server = impl._connection._transport._server
+    dispatcher = server.object(impl._guid)
+    return dispatcher.browser, dispatcher
+
+
 @pytest.mark.e2e
-def test_a_running_worker_follows_a_language_set_after_its_birth(firefox_binary, monkeypatch):
+def test_a_running_worker_follows_a_language_set_after_its_birth(firefox_binary):
     """⛔ A WORKER THAT ALREADY RUNS KEEPS THE LANGUAGE IT WAS BORN WITH. The language of a context can change after its pages and their
     workers exist (``Browser.setLocaleOverride`` writes the BrowsingContext's LanguageOverride whenever the client asks); a page's
     ``Intl`` follows at once, and the worker's realm has to follow too, or a site that asks the same question on the page and in a
     worker gets two languages out of one browser. The engine does it in WorkerPrivate::UpdateLanguageOverrideInternal.
 
-    Two de-DE contexts each with a dedicated worker; the language of the first context's tab is set to "fr-FR, fr" from the chrome scope
-    (the field the protocol command writes); the first worker answers fr-FR in its ``Intl`` from then on. The control is the second
+    Two de-DE contexts each with a dedicated worker; the language of the first context is set to "fr-FR, fr" with the Juggler command
+    the product itself uses for a context's language (``Browser.setLocaleOverride``, sent on the in-process connection as the
+    downloads test does; a write of the BrowsingContext field from Marionette is not the product's road); the first worker answers fr-FR in its ``Intl`` from then on. The control is the second
     context's worker: it was told nothing and still says de-DE, so the change reached the workers of its own context only.
     ``navigator.languages`` of the worker after the change is not asserted: it is what the engine does today and it is kept in the
     failure message.
     """
-    import webfont_probe
     from invisible_playwright import InvisiblePlaywright
 
-    monkeypatch.setenv("MOZ_REMOTE_ALLOW_SYSTEM_ACCESS", "1")   # the chrome-scope write below
-    port = webfont_probe.marionette_port()
     srv, base = probe.serve(SITE)
-    marionette = None
     try:
-        with InvisiblePlaywright(seed=5150, binary_path=firefox_binary, headless=True, locale="it-IT", timezone="Europe/Rome",
-                                 extra_args=probe.MARIONETTE_ARGS, extra_prefs={"marionette.port": port}) as browser:
+        with InvisiblePlaywright(seed=5150, binary_path=firefox_binary, headless=True, locale="it-IT", timezone="Europe/Rome") as browser:
             tabs = []
             for name in ("a", "b"):
-                page = browser.new_context(locale="de-DE").new_page()
+                context = browser.new_context(locale="de-DE")
+                page = context.new_page()
                 page.goto("%s/page?%s" % (base, name), wait_until="load", timeout=30_000)
                 page.evaluate(probe.START_LANG_WORKER_JS)
                 tabs.append(page)
@@ -227,8 +233,9 @@ def test_a_running_worker_follows_a_language_set_after_its_birth(firefox_binary,
             assert tab_a.evaluate(probe.ASK_LANG_WORKER_JS) == born, "the worker of the first de-DE context before the change"
             assert tab_b.evaluate(probe.ASK_LANG_WORKER_JS) == born, "the worker of the second de-DE context before the change"
 
-            marionette = probe.open_chrome(port)
-            assert probe.set_tab_language(marionette, tab_a.url, "fr-FR, fr") == 1, "the tab of the first context was not found"
+            engine, dispatcher = _engine_side(tab_a.context)
+            engine.conn.send("Browser.setLocaleOverride",
+                             {"browserContextId": dispatcher.context_id, "locale": "fr-FR, fr"}, timeout=None)
 
             seen = []
 
@@ -241,8 +248,6 @@ def test_a_running_worker_follows_a_language_set_after_its_birth(firefox_binary,
             assert tab_b.evaluate(probe.ASK_LANG_WORKER_JS) == born, (
                 "the worker of the second context, which nobody changed, must keep de-DE (the change is the first context's)")
     finally:
-        if marionette is not None:
-            marionette.close()
         probe.stop(srv)
 
 
@@ -429,14 +434,26 @@ def test_an_offscreen_canvas_of_a_worker_draws_with_the_language_group_of_its_co
                 page = browser.new_context(**options).new_page()
                 page.goto("%s/page?%s" % (base, name), wait_until="load", timeout=30_000)
                 read[name] = _canvas_widths(page)
+                # recorded for the failure message only: a canvas ELEMENT with no ``lang`` in the page of this context
+                read[name]["element_without_lang"] = page.evaluate(
+                    "() => {%s const c = document.createElement('canvas'); document.body.appendChild(c); return widths(c.getContext('2d'));}"
+                    % probe.MEASURE_JS)
+        # Everything measured, in every message below, so a failing run says which reader sides with which language: the worker of the
+        # ja-JP context and the worker of the default context (the session's own language, en-US), the main-thread offscreen canvas and
+        # the canvas element with no lang of each context's page, and the elements named ja and en.
+        record = "; ".join(
+            "%s context: worker=%r offscreen(main thread)=%r element(no lang)=%r element(lang=ja)=%r element(lang=en)=%r" % (
+                name, read[name]["worker"], read[name]["offscreen"], read[name]["element_without_lang"],
+                read[name]["element"]["ja"], read[name]["element"]["en"])
+            for name in ("ja", "en"))
         for name, other in (("ja", "en"), ("en", "ja")):
             got = read[name]
             assert got["element"]["ja"] != got["element"]["en"], (
-                "the two language groups draw these strings alike here, so nothing can tell them apart: %r" % (got["element"],))
+                "the two language groups draw these strings alike here, so nothing can tell them apart: %r [%s]" % (got["element"], record))
             assert got["worker"] == got["element"][name], (
-                "the worker of the %s context measures %r, a canvas of the %s group %r" % (name, got["worker"], name, got["element"][name]))
-            assert got["worker"] != got["element"][other], "the worker of the %s context measures as the %s group" % (name, other)
-        assert read["ja"]["worker"] != read["en"]["worker"], "the two contexts' workers measure alike: the context's language did not reach the canvas"
+                "the worker of the %s context measures %r, a canvas of the %s group %r [%s]" % (name, got["worker"], name, got["element"][name], record))
+            assert got["worker"] != got["element"][other], "the worker of the %s context measures as the %s group [%s]" % (name, other, record)
+        assert read["ja"]["worker"] != read["en"]["worker"], "the two contexts' workers measure alike: the context's language did not reach the canvas [%s]" % record
     finally:
         probe.stop(srv)
 
