@@ -8,7 +8,7 @@ asks the audio device. The core declares both for every persona, because the hos
 A page reads both on a new `AudioContext()` with no permission. The values declared here (37 ms and 6 channels) are ones no runner
 produces: a runner with no audio device answers 0 or 2.
 
-Negative control, in the same test: with both prefs -1 (the default of the engine, "ask the host") the same page reads the host's values,
+Negative control, in the same test: with the engine off (`hw_seed` 0, stock Firefox: an active engine refuses a declaration pref cleared) the same page reads the host's values,
 and they differ from the declared ones. The control reads what the host answers without asserting what it is: a runner with no audio
 device may refuse the context, and that refusal is also not the declared value.
 
@@ -22,6 +22,7 @@ pytestmark = pytest.mark.e2e
 
 OUTPUT_LATENCY = "zoom.stealth.audio.output_latency_ms"
 MAX_CHANNELS = "zoom.stealth.audio.max_channel_count"
+HW_SEED = "zoom.stealth.fpp.hw_seed"
 
 READ = """() => {
   try {
@@ -47,7 +48,7 @@ def test_the_audio_context_answers_the_declared_latency_and_channel_count(firefo
     declared = read(firefox_binary, {OUTPUT_LATENCY: 37, MAX_CHANNELS: 6})
     assert declared == {"outputLatency": 0.037, "maxChannelCount": 6}, declared
 
-    host = read(firefox_binary, {OUTPUT_LATENCY: -1, MAX_CHANNELS: -1})
+    host = read(firefox_binary, {HW_SEED: 0})
     assert host != declared, (host, declared)
     assert host.get("outputLatency") != 0.037, host
     assert host.get("maxChannelCount") != 6, host

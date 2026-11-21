@@ -15,7 +15,8 @@ A page reads all three with no permission (the storage estimate needs a secure c
 The values declared here (5 touch points, 7 cores, 123 MiB) are ones no runner has.
 
 Negative controls, in each test: touch points with no pin (the persona's own value, 0) and with the engine off (`hw_seed` 0, the host's
-answer, which is not 5); cores and quota with the pref -1 (the default of the engine, "ask the host"), which are not 7 and not 123 MiB.
+answer, which is not 5); cores and quota with the engine off (`hw_seed` 0, stock Firefox: the engine refuses a launch that is active with a declaration pref cleared),
+which are not 7 and not 123 MiB.
 The prefs are set through `extra_prefs` (the overlay the core applies last), the touch points through the pin the wrapper exposes.
 """
 from __future__ import annotations
@@ -89,8 +90,8 @@ def test_hardware_concurrency_is_the_declared_count_in_the_page_the_worker_and_t
     declared = read(firefox_binary, url, CORE_COUNTS, extra_prefs={CORES: 7})
     assert declared == {"main": 7, "worker": 7, "iframe": 7}, declared
 
-    # Control: pref -1, the three read the host's count (the same one, and not 7).
-    host = read(firefox_binary, url, CORE_COUNTS, extra_prefs={CORES: -1})
+    # Control: the engine off (hw_seed 0), the three read the host's count (the same one, and not 7).
+    host = read(firefox_binary, url, CORE_COUNTS, extra_prefs={HW_SEED: 0})
     assert host["main"] != 7, host
     assert host["worker"] == host["main"], host
     assert host["iframe"] == host["main"], host
@@ -101,7 +102,7 @@ def test_the_storage_quota_is_the_declared_megabytes(firefox_binary, fixture_ser
     declared = read(firefox_binary, url, QUOTA, extra_prefs={QUOTA_MB: 123})
     assert declared == {"secure": True, "quota": 123 * 1024 * 1024}, declared
 
-    # Control: pref -1, the quota Mozilla computed from the host's disk.
-    host = read(firefox_binary, url, QUOTA, extra_prefs={QUOTA_MB: -1})
+    # Control: the engine off (hw_seed 0), the quota Mozilla computed from the host's disk.
+    host = read(firefox_binary, url, QUOTA, extra_prefs={HW_SEED: 0})
     assert host.get("secure") is True, host
     assert host.get("quota") != 123 * 1024 * 1024, host
