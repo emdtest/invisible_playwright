@@ -17,6 +17,8 @@ null on both.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytestmark = pytest.mark.e2e
@@ -74,7 +76,16 @@ def read(binary, url, expression, extra_prefs=None):
                              timezone="America/New_York", extra_prefs=extra_prefs) as browser:
         page = browser.new_page()
         page.goto(url, timeout=60_000)
-        return page.evaluate(expression)
+        # The expression runs in the PAGE's realm, as a script of the page would: `page.evaluate` runs in the caller's world, where Firefox
+        # cannot wrap the iterator of `adapter.features` (a set-like): "Xray wrapping of iterators not supported". The answer is written as
+        # JSON into the DOM and the test waits on that condition.
+        page.add_script_tag(content=(
+            "(async () => { let out; try { out = await (%s)(); } catch (e) { out = {scriptError: String(e)}; }"
+            " document.documentElement.setAttribute('data-read', JSON.stringify(out)); })();" % expression))
+        page.wait_for_function("() => document.documentElement.hasAttribute('data-read')", timeout=60_000)
+        answer = json.loads(page.evaluate("() => document.documentElement.getAttribute('data-read')"))
+        assert not (isinstance(answer, dict) and "scriptError" in answer), answer
+        return answer
 
 
 def declared():
