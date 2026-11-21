@@ -13,9 +13,11 @@ What it fixes, from the page's side (`matchMedia`):
 Engine hook: `fingerprint/screen-window/css-media` of the engine series (`layout/style/nsMediaFeatures.cpp`:
 `GetDeviceSize`, `GetPointerCapabilities`; the declarations in `StealthMediaFeatures.h`).
 
-Negative controls, in the same test: the device size is read with the screen declaration ABSENT (engine off and the three
-screen prefs 0: a bare binary), which is the host's screen; the pointer is read with the declaration absent (-1 on both
-prefs: the compiled default / the host's answer); and has_touch is read in a context without it, on the same launch.
+Negative controls, in the same test: the device size is read on a launch declared with ANOTHER screen (2623x1411): the
+wrapper hands the declared screen to the browser by two roads (the screen prefs and the screen of the context, which Juggler
+emulates), so a launch with the prefs at 0 still reads the pinned screen; the queries must follow each declaration. The
+pointer is read with the engine off (`hw_seed` 0, stock Firefox: an active engine refuses a declaration cleared with -1), the
+host's answer; and has_touch is read in a context without it, on the same launch.
 
 Linux and Windows run the same assertions: the declared values are the ones no runner has (a 2731x1537 screen; a coarse
 primary pointer on a machine with a mouse).
@@ -29,9 +31,11 @@ pytestmark = pytest.mark.e2e
 #: A screen no runner has.
 SCREEN = {"screen.width": 2731, "screen.height": 1537, "screen.dpr": 1.0}
 
-#: Bare binary and no screen declared: the page reads the host.
-NO_SCREEN = {"zoom.stealth.fpp.hw_seed": 0, "zoom.stealth.screen.width": 0, "zoom.stealth.screen.height": 0,
-             "zoom.stealth.screen.color_depth": 0}
+#: Another screen no runner has: the control of the device size is a launch declared with this one.
+OTHER_SCREEN = {"screen.width": 2623, "screen.height": 1411, "screen.dpr": 1.0}
+
+#: The engine off (stock Firefox): the control of the pointer. The engine refuses an active launch with a declaration cleared.
+ENGINE_OFF = {"zoom.stealth.fpp.hw_seed": 0}
 
 COARSE, FINE, HOVER = 1, 2, 4
 
@@ -50,9 +54,10 @@ def _launch(binary, pin=None, extra_prefs=None):
                                extra_prefs=extra_prefs)
 
 
-def _read_pointer(binary, primary, every):
-    with _launch(binary, extra_prefs={"zoom.stealth.pointer.primary": primary,
-                                      "zoom.stealth.pointer.all": every}) as browser:
+def _read_pointer(binary, primary=None, every=None):
+    """Declared pointer prefs, or (both None) the engine off."""
+    prefs = ENGINE_OFF if primary is None else {"zoom.stealth.pointer.primary": primary, "zoom.stealth.pointer.all": every}
+    with _launch(binary, extra_prefs=prefs) as browser:
         page = browser.new_page()
         page.goto("about:blank", timeout=30000)
         return page.evaluate(READ_POINTER)
@@ -64,9 +69,9 @@ def test_a_declared_pointer_is_what_the_media_queries_read(firefox_binary):
                         "hover_none": True, "any_hover_none": True}, (
         "a coarse pointer without hover is declared and the page reads %r" % declared)
 
-    # The control: the declaration absent (-1) is not that machine. A fine pointer with hover is the declaration of a
-    # desktop; the host without a declaration answers its own, and it is not a coarse one without hover.
-    undeclared = _read_pointer(firefox_binary, -1, -1)
+    # The control: the engine off is not that machine. A fine pointer with hover is the declaration of a desktop; the host
+    # with no declaration answers its own, and it is not a coarse one without hover.
+    undeclared = _read_pointer(firefox_binary)
     assert undeclared != declared, "with no pointer declared the page reads the same as with a coarse one: %r" % undeclared
     assert undeclared["pointer_coarse"] is False and undeclared["any_coarse"] is False, (
         "with no pointer declared the page reads %r" % undeclared)
@@ -94,8 +99,9 @@ def test_has_touch_reads_a_coarse_pointer_even_when_a_fine_one_is_declared(firef
     assert with_touch["any_coarse"] is True, "any-pointer in a has_touch context reads %r" % with_touch
 
 
-def _read_device_size(binary, pin, extra_prefs=None):
-    with _launch(binary, pin=pin, extra_prefs=extra_prefs) as browser:
+def _read_device_size(binary, pin, ask):
+    """The page of a launch pinned to ``pin``, asked for the device size ``ask`` (width, height) and for its own."""
+    with _launch(binary, pin=pin) as browser:
         page = browser.new_page()
         page.goto("about:blank", timeout=30000)
         return page.evaluate("""([w, h]) => ({
@@ -103,19 +109,28 @@ def _read_device_size(binary, pin, extra_prefs=None):
             device_width: matchMedia('(device-width: ' + w + 'px)').matches,
             device_height: matchMedia('(device-height: ' + h + 'px)').matches,
             own_width: matchMedia('(device-width: ' + screen.width + 'px)').matches,
-            own_height: matchMedia('(device-height: ' + screen.height + 'px)').matches})""",
-                             [SCREEN["screen.width"], SCREEN["screen.height"]])
+            own_height: matchMedia('(device-height: ' + screen.height + 'px)').matches})""", list(ask))
 
 
 def test_the_device_size_media_queries_read_the_declared_screen(firefox_binary):
-    declared = _read_device_size(firefox_binary, SCREEN)
+    first = (SCREEN["screen.width"], SCREEN["screen.height"])
+    second = (OTHER_SCREEN["screen.width"], OTHER_SCREEN["screen.height"])
+
+    declared = _read_device_size(firefox_binary, SCREEN, first)
     assert declared["device_width"] is True and declared["device_height"] is True, (
         "(device-width: 2731px) and (device-height: 1537px) do not match under a declared 2731x1537 screen: %r" % declared)
-    assert (declared["screen_w"], declared["screen_h"]) == (2731, 1537)
+    assert (declared["screen_w"], declared["screen_h"]) == first
+    assert declared["own_width"] is True and declared["own_height"] is True, (
+        "the device size the media queries read is not the screen the page reads: %r" % declared)
 
-    # The control: the screen declaration absent is the host's screen, and the same query does not match.
-    host = _read_device_size(firefox_binary, SCREEN, extra_prefs=NO_SCREEN)
-    assert host["own_width"] is True and host["own_height"] is True, (
-        "the device size the media queries read is not the screen the page reads: %r" % host)
-    assert host["device_width"] is False and host["device_height"] is False, (
-        "(device-width: 2731px) matches with no screen declared: the control reads the declaration, %r" % host)
+    # The control: the wrapper hands the declared screen to the browser by two roads (the prefs, and the screen of the context
+    # that Juggler emulates), so the absent declaration is not a control. A launch with ANOTHER declared screen is: the same
+    # query for the first size does not match there, and the queries follow that declaration.
+    other = _read_device_size(firefox_binary, OTHER_SCREEN, first)
+    assert (other["screen_w"], other["screen_h"]) == second, other
+    assert other["device_width"] is False and other["device_height"] is False, (
+        "(device-width: 2731px) matches under a declared %dx%d screen: the media queries do not follow the declaration, %r"
+        % (second + (other,)))
+    assert other["own_width"] is True and other["own_height"] is True, (
+        "the device size the media queries read is not the screen the page reads: %r" % other)
+    assert second != first and other != declared
