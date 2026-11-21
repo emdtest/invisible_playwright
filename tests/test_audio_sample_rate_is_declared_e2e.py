@@ -7,7 +7,7 @@ host's rate is the machine's sound card (44100, 48000, 96000...).
 
 A page reads it on a new `AudioContext()` with no permission. The rate declared here, 22050, is one no sound card reports.
 
-Negative control, in the same test: with the pref -1 (the default of the engine, "ask the host") the same page reads the host's rate,
+Negative control, in the same test: with the engine off (`hw_seed` 0, stock Firefox: an active engine refuses a declaration pref cleared) the same page reads the host's rate,
 which is not 22050. The control does not assert what the host answers: a runner with no audio device answers its fallback, and a
 refused context is also not the declared rate.
 
@@ -20,6 +20,7 @@ import pytest
 pytestmark = pytest.mark.e2e
 
 SAMPLE_RATE = "zoom.stealth.audio.sample_rate"
+HW_SEED = "zoom.stealth.fpp.hw_seed"
 
 READ = """() => {
   try {
@@ -44,6 +45,6 @@ def test_the_audio_context_answers_the_declared_sample_rate(firefox_binary):
     declared = read(firefox_binary, {SAMPLE_RATE: 22050})
     assert declared == {"sampleRate": 22050}, declared
 
-    host = read(firefox_binary, {SAMPLE_RATE: -1})
+    host = read(firefox_binary, {HW_SEED: 0})
     assert host != declared, (host, declared)
     assert host.get("sampleRate") != 22050, host
