@@ -324,19 +324,18 @@ def test_webgl_readpixels_no_masking_signature(page):
 _DECLARED_SCREEN = {"screen.width": 2731, "screen.height": 1537, "screen.taskbar_px": 41,
                     "screen.color_depth": 30, "screen.dpr": 1.0}
 
-#: The declaration absent: a bare binary (engine off) with the three screen prefs at 0, which the engine reads as
-#: "not declared" and answers from the host.
-_NO_SCREEN_DECLARED = {"zoom.stealth.fpp.hw_seed": 0, "zoom.stealth.screen.width": 0,
-                       "zoom.stealth.screen.height": 0, "zoom.stealth.screen.color_depth": 0}
+#: Another screen no runner has, for the control: the wrapper hands the declared screen to the browser by two roads (the prefs and
+#: the screen of the context that Juggler emulates), so a launch with the prefs at 0 still reads the pinned screen.
+_OTHER_SCREEN = {"screen.width": 2623, "screen.height": 1411, "screen.taskbar_px": 37,
+                 "screen.color_depth": 24, "screen.dpr": 1.0}
 
 _READ_SCREEN = """() => ({width: screen.width, height: screen.height, availWidth: screen.availWidth,
                           availHeight: screen.availHeight, pixelDepth: screen.pixelDepth,
                           colorDepth: screen.colorDepth})"""
 
 
-def _read_screen(firefox_binary, extra_prefs=None):
-    with InvisiblePlaywright(seed=42, pin=_DECLARED_SCREEN, binary_path=firefox_binary, headless=True,
-                             extra_prefs=extra_prefs) as browser:
+def _read_screen(firefox_binary, pin=_DECLARED_SCREEN):
+    with InvisiblePlaywright(seed=42, pin=pin, binary_path=firefox_binary, headless=True) as browser:
         page = browser.new_page()
         page.goto("about:blank", timeout=30_000)
         return page.evaluate(_READ_SCREEN)
@@ -347,17 +346,23 @@ def test_a_declared_screen_that_no_runner_has_is_what_the_page_reads(firefox_bin
     """The page reads the screen the core declares (nsScreen::GetRect, GetAvailRect, PixelDepth), not the host's.
 
     The available height is the declared height less the declared taskbar (2731x1537, taskbar 41, depth 30 -> availWidth
-    2731, availHeight 1496). The control is the same launch with the declaration absent (engine off, the three screen prefs
-    at 0): the page then reads the host's screen, and none of the declared numbers.
+    2731, availHeight 1496). The control is a launch declared with ANOTHER screen (2623x1411, taskbar 37, depth 24: the wrapper
+    hands the declared screen to the browser by two roads, so the absent declaration is not a control): the page reads that one, and
+    none of the first declaration's numbers.
     """
-    declared = _read_screen(firefox_binary)
+    from _popup_geometry import in_a_thread_of_its_own
+
+    # The module's `page` fixture keeps a sync client open in this thread: a second browser needs a thread of its own.
+    declared = in_a_thread_of_its_own(lambda: _read_screen(firefox_binary))
     assert declared == {"width": 2731, "height": 1537, "availWidth": 2731, "availHeight": 1537 - 41,
                         "pixelDepth": 30, "colorDepth": 30}, "the page reads %r under a declared 2731x1537 screen" % declared
 
-    host = _read_screen(firefox_binary, extra_prefs=_NO_SCREEN_DECLARED)
+    host = in_a_thread_of_its_own(lambda: _read_screen(firefox_binary, _OTHER_SCREEN))
+    assert host == {"width": 2623, "height": 1411, "availWidth": 2623, "availHeight": 1411 - 37,
+                    "pixelDepth": 24, "colorDepth": 24}, "the page reads %r under another declared screen" % host
     for key in ("width", "height", "availWidth", "availHeight", "pixelDepth"):
         assert host[key] != declared[key], (
-            "with the declaration absent screen.%s reads %r, the declared value: the control reads the declaration "
+            "under another declared screen screen.%s reads %r, the first declared value: the control reads the first declaration "
             "(%r)" % (key, host[key], host))
 
 
@@ -371,7 +376,7 @@ def test_the_inner_size_of_the_top_is_synced_with_the_engine_active_and_not_with
     answers the same. The control is the same page with the engine off (`zoom.stealth.fpp.hw_seed` 0): the synced field
     is not filled and neither window reads the declared frame.
     """
-    from _popup_geometry import ENGINE_OFF, frame_of_the_declaration, read_popup
+    from _popup_geometry import ENGINE_OFF, frame_of_the_declaration, in_a_thread_of_its_own, read_popup
 
     frame = frame_of_the_declaration()
     extra = (2 * frame.border, frame.popup_ui + frame.border)
@@ -380,7 +385,8 @@ def test_the_inner_size_of_the_top_is_synced_with_the_engine_active_and_not_with
         top = reading["popup"]
         return (reading["frame"]["ow"], reading["frame"]["oh"]) == (top["iw"] + extra[0], top["ih"] + extra[1])
 
-    on = read_popup(firefox_binary, iframe=True, ready=synced)
+    # The module's `page` fixture keeps a sync client open in this thread: a second browser needs a thread of its own.
+    on = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, iframe=True, ready=synced))
     top, inner = on["popup"], on["frame"]
     assert (top["ow"], top["oh"]) == (top["iw"] + extra[0], top["ih"] + extra[1]), (
         "the popup reads outer %dx%d for inner %dx%d, the declared frame adds %r" % (top["ow"], top["oh"], top["iw"],
@@ -391,7 +397,7 @@ def test_the_inner_size_of_the_top_is_synced_with_the_engine_active_and_not_with
                                                top["iw"] + extra[0], top["ih"] + extra[1], inner["iw"], inner["ih"]))
     assert (inner["iw"], inner["ih"]) != (top["iw"], top["ih"]), "the iframe has the size of the popup: the read proves nothing"
 
-    off = read_popup(firefox_binary, extra_prefs=ENGINE_OFF, iframe=True)
+    off = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, extra_prefs=ENGINE_OFF, iframe=True))
     off_top, off_inner = off["popup"], off["frame"]
     assert (off_inner["ow"], off_inner["oh"]) != (off_top["iw"] + extra[0], off_top["ih"] + extra[1]), (
         "with the engine off the iframe of a popup also reads the top's inner size plus the declared frame: %r" % off)

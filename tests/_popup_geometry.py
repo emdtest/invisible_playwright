@@ -10,6 +10,7 @@ assertion names what was read when it never settled.
 """
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Dict, Optional
 
 from _fission_frames import Sites, wait_frame
@@ -25,6 +26,31 @@ ENGINE_OFF = {"zoom.stealth.fpp.hw_seed": 0}
 
 READ = """() => ({iw: innerWidth, ih: innerHeight, ow: outerWidth, oh: outerHeight,
                  sx: screenX, sy: screenY, mx: mozInnerScreenX, my: mozInnerScreenY})"""
+
+
+def in_a_thread_of_its_own(fn: Callable[[], Any], timeout: float = 300) -> Any:
+    """Runs `fn` in a thread with no asyncio loop and gives back its result or raises its error.
+
+    For a module whose own fixture keeps a sync client open for the whole module: an open sync client leaves its loop marked as
+    running in its thread, and a second sync client started in that thread refuses with "Playwright Sync API inside the asyncio
+    loop". The second browser needs a thread of its own.
+    """
+    box: Dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn()
+        except BaseException as exc:      # handed back to the test's thread below
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, name="second-sync-client", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise AssertionError("the browser of the test did not end within %d s" % timeout)
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
 
 
 def frame_of_the_declaration():
