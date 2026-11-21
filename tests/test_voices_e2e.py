@@ -52,7 +52,8 @@ def test_the_voices_are_retail_windows_in_its_order_and_none_is_the_default(
 # Retail Windows Firefox's SAPI backend names a voice `urn:moz-tts:sapi:<name>?<lang>`;
 # the engine builds that string from the declared list (the hook of
 # dom/media/webspeech/synth: StealthSpeechVoices, StealthSpeechVoice). With the
-# pref empty the engine does not answer: Firefox's own path reads the host's
+# engine off (`zoom.stealth.fpp.hw_seed` 0: an active engine refuses an empty
+# declaration) the engine does not answer: Firefox's own path reads the host's
 # registry (Windows) or speech-dispatcher (Linux).
 
 READ_URIS = """() => speechSynthesis.getVoices().map(v => [v.name, v.voiceURI])"""
@@ -91,11 +92,11 @@ def test_the_voice_uri_is_the_retail_form_and_an_empty_list_falls_to_the_registr
     one = _uris(firefox_binary, {"zoom.stealth.voices.list": "%s|en-US|0|1" % _ONLY})
     assert one == [[_ONLY, "urn:moz-tts:sapi:%s?en-US" % _ONLY]], one
 
-    # Negative control: the same launch with the list empty is not answered by
-    # the engine. Whatever the host's registry (Windows) or speech-dispatcher
+    # Negative control: the same launch with the engine off (stock Firefox) is not
+    # answered by the engine. Whatever the host's registry (Windows) or speech-dispatcher
     # (Linux) lists, it is not the declared voice, and no URI is of the engine's
     # internal `stealth` form.
-    empty = _uris(firefox_binary, {"zoom.stealth.voices.list": ""})
+    empty = _uris(firefox_binary, {"zoom.stealth.fpp.hw_seed": 0})
     assert all(name != _ONLY for name, _uri in empty), empty
     assert not any(uri.startswith("stealth") for _n, uri in empty), empty
     assert empty != one, (empty, one)
