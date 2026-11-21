@@ -286,7 +286,9 @@ def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, s
         # the context loses its download options: Firefox's own path takes the download
         engine.conn.send("Browser.setDownloadOptions",
                          {"browserContextId": ctx.context_id, "downloadOptions": None}, timeout=None)
-        page.click("#dl")
+        # The click on a download Firefox keeps plans a navigation that never completes (nothing commits: the response is a download),
+        # so the click does not wait for it; the end of the test waits on the CONDITION, the file in Firefox's directory.
+        page.click("#dl", no_wait_after=True, timeout=30_000)
         landed = where / "report.bin"
         assert wait_until(lambda: landed.exists() and landed.read_bytes() == BODY, 120,
                           pump=lambda: page.wait_for_timeout(100)), os.listdir(str(where))
