@@ -33,7 +33,9 @@ from _window_sessions import launch, wait_for_condition
 
 pytestmark = pytest.mark.e2e
 
-DECLARED = {"screen.width": 1600, "screen.height": 900}
+#: The device pixel ratio is pinned too: the core declares 1.5 for some personas (Windows runner), and a page reads the screen and the window in
+#: CSS pixels, declared / dpr (1067x600), which is not what this test is about.
+DECLARED = {"screen.width": 1600, "screen.height": 900, "screen.dpr": 1.0}
 
 PAGE = (b"<!doctype html><html><head><meta charset=utf-8><title>fullscreen</title></head><body style=\"margin:0\">"
         b"<button id=go style=\"position:fixed;left:20px;top:20px;width:160px;height:40px;margin:0\">fullscreen</button>"
