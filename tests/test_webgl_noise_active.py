@@ -25,8 +25,9 @@ correct drivers may disagree.
 Three more tests characterise the roads by which a page reads a WebGL canvas (the
 engine's WebGL readback hooks: ClientWebGLContext.cpp and StealthWebGLReadback.h
 of the fingerprint/canvas/noise-projection folder). Each reads with the engine on
-(zoom.stealth.fpp.hw_seed > 0) and, as the negative control in the same test, off
-(hw_seed 0: the bytes as drawn), and asserts the two differ, or no noise reached
+(zoom.stealth.fpp.hw_seed > 0) and, as the negative control in the same test, with the
+canvas noise declared off (zoom.stealth.canvas.substitute_pixels false, the engine still
+on: the bytes as drawn), and asserts the two differ, or no noise reached
 the road the test compares:
 
 * readPixels into a PIXEL_PACK_BUFFER (WebGL2), read back with getBufferSubData,
@@ -138,9 +139,11 @@ def test_a_flat_clear_reads_back_exactly_as_cleared(firefox_binary, seed):
         "on it is a tell" % (len(moved), moved[:5]))
 
 
-#: A hw_seed no runner has by accident (the engine is on when it is positive) and the one that turns it off.
+#: A hw_seed no runner has by accident (the engine is on when it is positive). The control of the tests below keeps the engine ON, with the
+#: same declared GPU, and declares only the canvas noise off (``zoom.stealth.canvas.substitute_pixels`` false): a launch with hw_seed 0 would
+#: change the declared GPU too, and a Windows runner without the engine has no WebGL2 at all, so the comparison would say nothing.
 _ENGINE_ON = 12345
-_ENGINE_OFF = 0
+_ENGINE_OFF = 0   # "the noise is off": the engine stays on (see _page)
 
 #: Draws what the tests below read: a triangle with per-vertex colours and antialiased edges on a white clear,
 #: the render of _GRADIENT_JS, where a device varies and so where the noise lands. ``scene(canvas, kind, attrs, alpha)``
@@ -174,10 +177,14 @@ const scene = (c, kind, attrs, alpha) => {
 
 @contextlib.contextmanager
 def _page(firefox_binary, hw_seed: int):
-    """One short-lived browser, the engine on (hw_seed > 0) or off (0), at a blank page."""
+    """One short-lived browser at a blank page, the engine always on: with the noise on (hw_seed > 0) or with only the canvas noise
+    declared off (``_ENGINE_OFF``: ``zoom.stealth.canvas.substitute_pixels`` false, the bytes as drawn by the same declared GPU)."""
+    prefs = {"zoom.stealth.fpp.hw_seed": _ENGINE_ON}
+    if hw_seed == _ENGINE_OFF:
+        prefs["zoom.stealth.canvas.substitute_pixels"] = False
     with InvisiblePlaywright(
         seed=7, binary_path=firefox_binary, headless=True,
-        extra_prefs={"zoom.stealth.fpp.hw_seed": hw_seed},
+        extra_prefs=prefs,
     ) as b:
         p = b.new_context().new_page()
         p.goto("about:blank", timeout=30_000)
