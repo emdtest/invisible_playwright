@@ -22,7 +22,8 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
-PROBE = """() => {
+#: Raw: the backslash-n of the JS source is an escape the page reads, not a line break written into the string literal.
+PROBE = r"""() => {
   document.body.innerHTML = '<div>one</div><div>two</div>';
   const sel = getSelection();
   sel.removeAllRanges();
