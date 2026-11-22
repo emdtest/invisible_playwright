@@ -20,9 +20,11 @@ from _waits import wait_until
 #: position 4 (device pixels, and CSS pixels at 1.0). The screen is the one the other surface tests pin.
 PIN = {"screen.width": 1920, "screen.height": 1080, "screen.dpr": 1.0}
 
-#: Engine off: `zoom.stealth.fpp.hw_seed` 0 is a bare binary, which every hook of the geometry answers with Mozilla's own
-#: path (`gfx::StealthEngineActive()`).
-ENGINE_OFF = {"zoom.stealth.fpp.hw_seed": 0}
+#: A second declared window frame that no runner has: a border of 6, a popup UI of 53 above the content, a default position of 9. The declared frame at scale 1.0
+#: (8, 72, 4) is the frame of a retail Windows window, so a Windows runner's own popup has it too (outer - inner = 16 x 80) and a launch with the engine off
+#: cannot tell the declaration from the host there; a launch declared with ANOTHER frame can (the prefs are applied last, over the core's declaration).
+OTHER_FRAME = {"zoom.stealth.screen.frame_border": 6, "zoom.stealth.screen.popup_ui": 53, "zoom.stealth.screen.popup_position": 9}
+OTHER_BORDER, OTHER_POPUP_UI, OTHER_POSITION = 6, 53, 9
 
 READ = """() => ({iw: innerWidth, ih: innerHeight, ow: outerWidth, oh: outerHeight,
                  sx: screenX, sy: screenY, mx: mozInnerScreenX, my: mozInnerScreenY})"""
@@ -58,6 +60,11 @@ def frame_of_the_declaration():
     from invisible_core.constants import WINDOW_FRAME_BY_DPR
 
     return WINDOW_FRAME_BY_DPR[1.0]
+
+
+def frame_extra(border: int, popup_ui: int):
+    """What a popup adds to its inner size: (outer - inner) wide and high, for a border and a popup UI."""
+    return (2 * border, popup_ui + border)
 
 
 def _plausible(reading: Dict[str, Any]) -> bool:

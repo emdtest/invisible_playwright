@@ -373,20 +373,27 @@ def test_the_inner_size_of_the_top_is_synced_with_the_engine_active_and_not_with
     With the engine active the top-level inner size is synced to every process of the browsing context, so an iframe of
     another site in a popup (200x150, in its own process) answers the outer size of the POPUP: the top's inner size plus the
     declared frame, 2 * border wide and popup UI + border high, and not the size of its own 200x150. The popup itself
-    answers the same. The control is the same page with the engine off (`zoom.stealth.fpp.hw_seed` 0): the synced field
-    is not filled and neither window reads the declared frame.
+    answers the same. The control is the same page in a launch declared with a SECOND frame that no runner has (border 6, popup
+    UI 53): the iframe then answers the top's inner size plus THAT frame, and none of the first declaration's. The engine off is
+    not the control: the declared frame is the one of a retail Windows window at scale 1.0, so a Windows runner's own popup
+    reads it with the engine off too (measured: 516x480 for a 500x400 popup) and the test could not fail there.
     """
-    from _popup_geometry import ENGINE_OFF, frame_of_the_declaration, in_a_thread_of_its_own, read_popup
+    from _popup_geometry import (OTHER_BORDER, OTHER_FRAME, OTHER_POPUP_UI, frame_extra, frame_of_the_declaration,
+                                 in_a_thread_of_its_own, read_popup)
 
     frame = frame_of_the_declaration()
-    extra = (2 * frame.border, frame.popup_ui + frame.border)
+    extra = frame_extra(frame.border, frame.popup_ui)
+    other_extra = frame_extra(OTHER_BORDER, OTHER_POPUP_UI)
+    assert other_extra != extra
 
-    def synced(reading):
-        top = reading["popup"]
-        return (reading["frame"]["ow"], reading["frame"]["oh"]) == (top["iw"] + extra[0], top["ih"] + extra[1])
+    def synced_to(wanted):
+        def synced(reading):
+            top = reading["popup"]
+            return (reading["frame"]["ow"], reading["frame"]["oh"]) == (top["iw"] + wanted[0], top["ih"] + wanted[1])
+        return synced
 
     # The module's `page` fixture keeps a sync client open in this thread: a second browser needs a thread of its own.
-    on = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, iframe=True, ready=synced))
+    on = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, iframe=True, ready=synced_to(extra)))
     top, inner = on["popup"], on["frame"]
     assert (top["ow"], top["oh"]) == (top["iw"] + extra[0], top["ih"] + extra[1]), (
         "the popup reads outer %dx%d for inner %dx%d, the declared frame adds %r" % (top["ow"], top["oh"], top["iw"],
@@ -397,9 +404,14 @@ def test_the_inner_size_of_the_top_is_synced_with_the_engine_active_and_not_with
                                                top["iw"] + extra[0], top["ih"] + extra[1], inner["iw"], inner["ih"]))
     assert (inner["iw"], inner["ih"]) != (top["iw"], top["ih"]), "the iframe has the size of the popup: the read proves nothing"
 
-    off = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, extra_prefs=ENGINE_OFF, iframe=True))
-    off_top, off_inner = off["popup"], off["frame"]
-    assert (off_inner["ow"], off_inner["oh"]) != (off_top["iw"] + extra[0], off_top["ih"] + extra[1]), (
-        "with the engine off the iframe of a popup also reads the top's inner size plus the declared frame: %r" % off)
-    assert (off_top["ow"], off_top["oh"]) != (off_top["iw"] + extra[0], off_top["ih"] + extra[1]), (
-        "with the engine off the popup also reads the declared frame: %r" % off)
+    other = in_a_thread_of_its_own(lambda: read_popup(firefox_binary, extra_prefs=OTHER_FRAME, iframe=True, ready=synced_to(other_extra)))
+    other_top, other_inner = other["popup"], other["frame"]
+    assert (other_inner["ow"], other_inner["oh"]) == (other_top["iw"] + other_extra[0], other_top["ih"] + other_extra[1]), (
+        "declared with another frame the iframe of a popup reads outer %dx%d, the top's inner %dx%d plus the second declared frame %r is %dx%d: %r"
+        % (other_inner["ow"], other_inner["oh"], other_top["iw"], other_top["ih"], other_extra,
+           other_top["iw"] + other_extra[0], other_top["ih"] + other_extra[1], other))
+    assert (other_top["ow"], other_top["oh"]) == (other_top["iw"] + other_extra[0], other_top["ih"] + other_extra[1]), (
+        "declared with another frame the popup reads outer %dx%d for inner %dx%d, the second declared frame adds %r"
+        % (other_top["ow"], other_top["oh"], other_top["iw"], other_top["ih"], other_extra))
+    assert (other_inner["ow"] - other_top["iw"], other_inner["oh"] - other_top["ih"]) != (inner["ow"] - top["iw"], inner["oh"] - top["ih"]), (
+        "the iframe reads the same frame under two declarations: it does not follow the declaration: %r vs %r" % (other, on))
