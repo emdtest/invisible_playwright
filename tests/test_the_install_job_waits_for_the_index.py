@@ -48,10 +48,40 @@ os.replace(tmp, p)
 """
 
 
+# The clock of the wait. The script reads `time.monotonic` and sleeps with `time.sleep` (it has no other seam), so it runs behind this preamble:
+# the clock moves only by what the script sleeps and by what a call is said to cost, never by the real time a call took. How many rounds the
+# wait makes is then decided by the answers of the installers and by its own arithmetic, whatever the load of the machine running the test.
+# A call is free in fake time; one that hangs (exit code HUNG) costs the whole limit it was given, as a real one would. `subprocess` is imported
+# before the clock is replaced, so its own timeouts stay on the real one.
+_HUNG = 99
+_FAKE_CLOCK = """
+import subprocess, time
+_now = [1000.0]
+_run = subprocess.run
+
+
+def _run_in_fake_time(*args, **kwargs):
+    done = _run(*args, **dict(kwargs, timeout=60))
+    if done.returncode == %d:
+        _now[0] += kwargs["timeout"]
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+    return done
+
+
+def _sleep(seconds):
+    _now[0] += seconds
+
+
+subprocess.run = _run_in_fake_time
+time.monotonic = lambda: _now[0]
+time.sleep = _sleep
+""" % _HUNG
+
+
 def _tool(tmp_path, name, plan, load=0.0):
     """A regular package `name` on the shim path whose `__main__` answers call number i as plan[i] says (the last letter repeats):
-    y = resolves it, n = no such version, h = does not answer (sleeps 30 s). It counts its calls in `<name>-calls`.
-    `load` is real time every call spends before it answers: what a machine busy with other work takes."""
+    y = resolves it, n = no such version, h = does not answer (exits with HUNG, which the fake clock below turns into a call that outlived its limit).
+    It counts its calls in `<name>-calls`. `load` is real time every call spends before it answers: what a machine busy with other work takes."""
     shim = tmp_path / "shim" / name
     shim.mkdir(parents=True)
     (shim / "__init__.py").write_text("", encoding="utf-8")   # a REGULAR package: a namespace one loses to the real one of the environment
@@ -62,12 +92,12 @@ def _tool(tmp_path, name, plan, load=0.0):
         what = plan[min(n, len(plan) - 1)]
         time.sleep(%r)
         if what == "h":
-            time.sleep(30)
+            sys.exit(%d)
         if what == "y":
             sys.exit(0)
         sys.stderr.write("ERROR: No matching distribution found for invisible-playwright==9.9.9" + chr(10))
         sys.exit(1)
-    """) % (name, plan, load), encoding="utf-8")
+    """) % (name, plan, load, _HUNG), encoding="utf-8")
 
 
 def _run_the_wait(tmp_path, pip="y", uv="y", *, seconds=3.0, poll=0.05, call_seconds=None, load=0.0):
@@ -81,7 +111,7 @@ def _run_the_wait(tmp_path, pip="y", uv="y", *, seconds=3.0, poll=0.05, call_sec
     if call_seconds is not None:
         env["INDEX_WAIT_CALL_SECONDS"] = str(call_seconds)
     try:
-        r = subprocess.run([sys.executable, "-c", _wait_script()], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+        r = subprocess.run([sys.executable, "-c", _FAKE_CLOCK + _wait_script()], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         pytest.fail("the wait did not end within 60 s with INDEX_WAIT_SECONDS=%s: it does not read its deadline" % seconds)
 
@@ -111,8 +141,8 @@ def test_a_no_between_the_yes_starts_the_count_again(tmp_path):
 
 
 def test_calls_that_take_long_on_a_busy_machine_do_not_cut_the_rounds_short(tmp_path):
-    """The rounds are decided by what the installers answer, not by how long the machine took to run them: each call spends 0.3 s here
-    (a busy PC), which is more than the 1 s of budget over the 8 calls of four rounds, and the wait still goes on to its third yes."""
+    """The rounds are decided by what the installers answer, not by how long the machine took to run them: each call spends 0.3 s of real
+    time here (a busy PC), 2.4 s over the 8 calls of four rounds against a budget of 1 s, and the wait still goes on to its third yes."""
     r, pip_calls, uv_calls = _run_the_wait(tmp_path, pip="y", uv="nyyy", seconds=1.0, load=0.3)
     assert r.returncode == 0, r.stdout + r.stderr
     assert (pip_calls, uv_calls) == (4, 4), "pip %d, uv %d" % (pip_calls, uv_calls)
