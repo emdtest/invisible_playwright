@@ -27,16 +27,22 @@ That move, last, is the tracker's own signal (``EVENT_OBJECT_LOCATIONCHANGE`` of
 tracker checks: the second window visible, not minimized, not cloaked, not layered-transparent, not a popup, above the first in the ``GW_HWNDPREV`` chain, and
 the first window inside it. Every red carries the two calls' results and ``GetLastError``, the Z-order from the top down to the first window (process, class,
 topmost), and the foreground window and its process, read once after the arrangement and again after the page has answered, so a covered window that something
-raised back is told from an arrangement the system refused.
+raised back is told from an arrangement the system refused. Before the topmost arrangement each half first does the plain one (the covered window
+inserted right after the cover, no topmost), waits for the page's answer it waits for anyway, and records, as evidence and never as a verdict, whether the
+system kept that order and whether the foreground window belongs to one of the two engines; ``FailureEvidence`` saves that record under
+``$RUNNER_TEMP/invpw-evidence/test_window_occlusion/`` on every run, green or red, and every message carries one line per half
+("order without topmost: kept / not kept, foreground: pid X (engine yes/no)").
 
 A page reads it from ``document.visibilityState`` and the ``visibilitychange`` event.
 """
 from __future__ import annotations
 
 import sys
+import threading
 
 import pytest
 
+from _evidence_on_failure import FailureEvidence
 from _waits import watch
 from _window_sessions import DEADLINE_S, in_a_thread_of_its_own, launch, wait_for_condition
 
@@ -211,16 +217,33 @@ class Win32:
         result = self.user32.SetWindowPos(hwnd, self.wintypes.HWND(after) if after is not None else None, x, y, cx, cy, flags)
         return (result, self.ctypes.get_last_error())
 
-    def arrange(self, covered, cover):
-        """Makes ``cover`` topmost, then moves ``covered`` inside ``cover``'s rectangle and its work area; activates nothing. The calls' answers."""
-        calls = {"cover HWND_TOPMOST": self.set_window_pos(cover, self.HWND_TOPMOST, 0, 0, 0, 0, self.SWP_NOMOVE | self.SWP_NOSIZE | self.SWP_NOACTIVATE)}
+    def inside(self, cover):
+        """(x, y, width, height) inside ``cover``'s rectangle as the tracker reads it and inside its work area, ``INSET`` from both."""
         cl, ct, cr, cb = self.tracker_rect(cover)
         wl, wt, wr, wb = self.work_area(cover)
         left, top, right, bottom = max(cl, wl) + INSET, max(ct, wt) + INSET, min(cr, wr) - INSET, min(cb, wb) - INSET
         assert right - left > 2 * INSET and bottom - top > 2 * INSET, "no room inside the covering window %r (work area %r)" % (
             (cl, ct, cr, cb), (wl, wt, wr, wb))
-        calls["covered moved inside"] = self.set_window_pos(covered, None, left, top, right - left, bottom - top, self.SWP_NOZORDER | self.SWP_NOACTIVATE)
+        return (left, top, right - left, bottom - top)
+
+    def insert_under(self, covered, cover):
+        """The arrangement without topmost: ``covered`` inserted right after ``cover`` in the Z-order, inside its rectangle; activates nothing."""
+        return {"covered inserted after the cover": self.set_window_pos(covered, cover, *self.inside(cover), self.SWP_NOACTIVATE)}
+
+    def arrange(self, covered, cover):
+        """Makes ``cover`` topmost, then moves ``covered`` inside ``cover``'s rectangle and its work area; activates nothing. The calls' answers."""
+        calls = {"cover HWND_TOPMOST": self.set_window_pos(cover, self.HWND_TOPMOST, 0, 0, 0, 0, self.SWP_NOMOVE | self.SWP_NOSIZE | self.SWP_NOACTIVATE)}
+        calls["covered moved inside"] = self.set_window_pos(covered, None, *self.inside(cover), self.SWP_NOZORDER | self.SWP_NOACTIVATE)
         return calls
+
+    @staticmethod
+    def process_name(pid):
+        try:
+            import psutil
+
+            return psutil.Process(pid).name()
+        except Exception as problem:     # a process gone, or no psutil: the pid is still recorded
+            return "(%s)" % type(problem).__name__
 
     def pid(self, hwnd):
         pid = self.wintypes.DWORD()
@@ -275,24 +298,58 @@ class CoveringOnWindows:
         self.first, self.cover = found[COVERED_TITLE], found[COVER_TITLE]
         wait_for_condition(covered, lambda: self.win.why_it_cannot_cover(self.cover), lambda why: why == "",
                            "the covering window is not one the tracker counts as covering")
+        self.without_topmost = None
+        self.calls = None
+        self.after_arrangement = None
+
+    def record_without_topmost(self, answered):
+        """The arrangement without topmost, then ``answered()`` (the page's answer the half waits for), then the Z-order and the foreground read
+        back: EVIDENCE only, nothing asserted. Whether the system kept the order, and whether the foreground is one of the two engines."""
+        calls = self.win.insert_under(self.first, self.cover)
+        page = answered()
+        seen = self.read()
+        foreground = seen["foreground"]
+        pid = foreground[1] if foreground else None
+        engine = {self.win.pid(self.first): "the covered session's engine", self.win.pid(self.cover): "the covering session's engine"}.get(pid)
+        self.without_topmost = {"calls": calls, "page": page, "read back": seen,
+                                "line": "order without topmost: %s, foreground: pid %s %s (engine %s)" % (
+                                    "kept" if seen["cover above"] else "not kept", pid, self.win.process_name(pid) if pid else "",
+                                    "yes, %s" % engine if engine else "no")}
+
+    def arrange(self):
+        """The arrangement the precondition rests on: the cover topmost, then the covered window inside it, read back once right after."""
         self.calls = self.win.arrange(self.first, self.cover)
         self.after_arrangement = self.read()
-        assert self.after_arrangement["ok"], "the second window does not cover the first one as the tracker reads them, read once right after %r: %r" % (
-            self.calls, self.after_arrangement)
+        assert self.after_arrangement["ok"], "the second window does not cover the first one as the tracker reads them, read once right after %r: %r; %s" % (
+            self.calls, self.after_arrangement, self.without_topmost["line"])
 
     def read(self):
         return self.win.coverage(self.first, self.cover)
 
     def evidence(self):
-        """The calls, the read-back right after them, and a read-back now: a covered window raised back after the arrangement shows here."""
-        return {"calls": self.calls, "after the arrangement": self.after_arrangement, "now": self.read()}
+        """Without topmost (calls, the page, the read-back, the summary line), the topmost calls, the read-back right after them, and a read-back
+        now: a covered window raised back after the arrangement shows here."""
+        return {"without topmost": self.without_topmost, "calls": self.calls, "after the arrangement": self.after_arrangement, "now": self.read()}
 
 
-def second_window_over_the_first(firefox_binary, tracking):
+class Record:
+    """A record the test keeps itself, in the shape ``FailureEvidence.note_records`` saves (``lock``, ``records``)."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.records = []
+
+    def add(self, record) -> None:
+        with self.lock:
+            self.records.append(record)
+
+
+def second_window_over_the_first(firefox_binary, tracking, record):
     """(state, changes, windows) of the first session's page after a second session's window is up over it; ``windows`` is the Windows evidence
-    of the covering (None elsewhere).
+    of the covering (None elsewhere), also added to ``record`` for the evidence file.
 
     ``tracking`` is None for the product as it launches, or the value both tracking prefs are given."""
+    half = "control (tracking enabled)" if tracking else "product"
     extra = None if tracking is None else {name: tracking for name in TRACKING_PREFS}
     with launch(firefox_binary, extra_prefs=extra) as first, in_a_thread_of_its_own(firefox_binary) as second:
         covered = first.new_page()
@@ -301,13 +358,27 @@ def second_window_over_the_first(firefox_binary, tracking):
         assert covered.evaluate(WATCH) == "visible", "the page was not visible before anything covered it"
         second.run(opens_the_covering_window)
         covering = CoveringOnWindows(covered) if sys.platform == "win32" else None
-        if tracking:
-            seen = watch_state(covered)
-            assert seen.ok, "a window that another one covers never turned hidden with occlusion tracking enabled; seen: %s; windows: %r" % (
-                seen.render(), covering.evidence() if covering else None)
-        else:
-            covered.evaluate(TWO_FRAMES)
-        return covered.evaluate(STATE), covered.evaluate(CHANGES), covering.evidence() if covering else None
+
+        def answered():
+            """The page's answer this half waits for: ``hidden`` with tracking (the wait, not asserted here), two frames without."""
+            if tracking:
+                return {"hidden": watch_state(covered).render()}
+            return {"two frames": covered.evaluate(TWO_FRAMES), "state": covered.evaluate(STATE)}
+
+        try:
+            if covering:
+                covering.record_without_topmost(answered)
+                covering.arrange()
+            if tracking:
+                seen = watch_state(covered)
+                assert seen.ok, "a window that another one covers never turned hidden with occlusion tracking enabled; seen: %s; windows: %r" % (
+                    seen.render(), covering.evidence() if covering else None)
+            else:
+                covered.evaluate(TWO_FRAMES)
+            return covered.evaluate(STATE), covered.evaluate(CHANGES), covering.evidence() if covering else None
+        finally:
+            if covering:
+                record.add({"half": half, **covering.evidence()})
 
 
 def watch_state(covered):
@@ -315,12 +386,25 @@ def watch_state(covered):
     return watch(lambda: covered.evaluate(STATE), lambda state: state == "hidden", DEADLINE_S, lambda: covered.wait_for_timeout(100))
 
 
-def test_a_covered_window_stays_visible_unless_occlusion_tracking_is_enabled(firefox_binary):
-    tracked_state, tracked_changes, tracked_windows = second_window_over_the_first(firefox_binary, True)
-    assert tracked_state == "hidden" and tracked_changes == ["visible", "hidden"], (
-        "control: with tracking enabled the covered page reads %r, changes %r; windows: %r" % (tracked_state, tracked_changes, tracked_windows))
+def lines(record):
+    """Per half, the one line of the arrangement without topmost."""
+    with record.lock:
+        return ["%s: %s" % (r["half"], (r.get("without topmost") or {}).get("line")) for r in record.records]
 
-    state, changes, windows = second_window_over_the_first(firefox_binary, None)
-    assert state == "visible" and changes == ["visible"], (
-        "the product's covered page reads %r, changes %r: it must stay visible, with no visibilitychange; windows: %r" % (state, changes, windows))
-    assert state != tracked_state, "enabled and disabled read the same: the declaration decides nothing"
+
+def test_a_covered_window_stays_visible_unless_occlusion_tracking_is_enabled(firefox_binary):
+    record = Record()
+    with FailureEvidence("test_window_occlusion") as evidence:
+        evidence.note_records("windows", record)
+        tracked_state, tracked_changes, tracked_windows = second_window_over_the_first(firefox_binary, True, record)
+        assert tracked_state == "hidden" and tracked_changes == ["visible", "hidden"], (
+            "control: with tracking enabled the covered page reads %r, changes %r; %s; windows: %r" % (
+                tracked_state, tracked_changes, lines(record), tracked_windows))
+
+        state, changes, windows = second_window_over_the_first(firefox_binary, None, record)
+        assert state == "visible" and changes == ["visible"], (
+            "the product's covered page reads %r, changes %r: it must stay visible, with no visibilitychange; %s; windows: %r" % (
+                state, changes, lines(record), windows))
+        assert state != tracked_state, "enabled and disabled read the same: the declaration decides nothing"
+        evidence.keep("always kept: %s" % (lines(record),))
+        sys.stderr.write("occlusion arrangement: %s\n" % (lines(record),))
