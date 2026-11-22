@@ -262,7 +262,8 @@ class _ServerSideLog:
                 try:
                     result = original(*args, **kwargs)
                 except BaseException as exc:
-                    log._record(lambda: log._step("wait_until_ready_failed", page=page.guid, error=repr(exc)[:300]))
+                    error = repr(exc)[:300]
+                    log._record(lambda: log._step("wait_until_ready_failed", page=page.guid, error=error))
                     raise
                 log._record(lambda: log._step("wait_until_ready_end", page=page.guid))
                 return result
