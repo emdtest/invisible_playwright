@@ -458,10 +458,16 @@ class _Journal:
         self.records = []
 
     def add(self, **fields):
-        fields.setdefault("t", round(time.time(), 4))
-        fields.setdefault("m", round(time.perf_counter(), 6))
-        with self.lock:
-            self.records.append(fields)
+        """Never raises: it is called from the gateway's own threads, and a failure there would be the test's, not the product's.
+        Who wrote a record is ``origin`` (gateway, socket, test, page), never ``source``: that is a field of a datagram."""
+        try:
+            fields.setdefault("t", round(time.time(), 4))
+            fields.setdefault("m", round(time.perf_counter(), 6))
+            with self.lock:
+                self.records.append(fields)
+        except Exception as problem:  # noqa: BLE001 - recorded, never raised
+            with self.lock:
+                self.records.append({"origin": "journal", "event": "a record could not be kept", "error": repr(problem)})
 
 
 def _interfaces_of_this_runner(relay_host):
@@ -544,17 +550,33 @@ class _Watch:
         return "another address"
 
     # ---- the control connections --------------------------------------------------------------------------------------------------
+    def safely(self, record):
+        """Runs ``record``, a recording (it builds a record and adds it): it NEVER raises, whatever it reads or formats, and a failure of it
+        is itself a record (``origin: watch``). Every recording of every wrapper goes through here, and the call of the original (the
+        gateway's own method, the real socket) is made outside it, with its own arguments, so that what the gateway returns or raises is
+        what it did before and a datagram is never lost to the test's own bookkeeping."""
+        try:
+            record()
+        except Exception as problem:  # noqa: BLE001 - the recording failed: say so, and go on
+            try:
+                self.control.add(origin="watch", event="a record could not be made", error=repr(problem))
+            except Exception:  # noqa: BLE001 - not even that could be kept: nothing is raised into the gateway's thread
+                pass
+
     def _wrap_the_gateway(self, monkeypatch):
         gateway, control, reads, watch = self.gateway, self.control, self._reads, self
         import _socks_servers as servers
 
         original_recv_exact = servers._recv_exact
 
-        def recv_exact(s, n):
-            data = original_recv_exact(s, n)
+        def keep_the_read(data):
             sink = getattr(reads, "sink", None)
             if sink is not None:
                 sink.append(data)
+
+        def recv_exact(s, n):
+            data = original_recv_exact(s, n)
+            watch.safely(lambda: keep_the_read(data))
             return data
 
         monkeypatch.setattr(servers, "_recv_exact", recv_exact)
@@ -564,63 +586,71 @@ class _Watch:
         original_send, original_connect = gateway._send, gateway._connect
         original_associate, original_route, original_deliver = gateway._associate, gateway._route, gateway._deliver
 
-        def handle(c):
-            reads.sink, reads.address, reads.cmd = [], None, None
-            started = time.monotonic()
+        def note_accepted(c):
             try:
                 peer, local = c.getpeername(), c.getsockname()
             except OSError as problem:
                 peer = local = repr(problem)
-            control.add(event="control connection accepted", conn=watch._conn(), gw=watch._gw(), client=str(peer), gateway_end=str(local))
+            control.add(origin="gateway", event="control connection accepted", conn=watch._conn(), gw=watch._gw(),
+                        client=str(peer), gateway_end=str(local))
+
+        def note_closed(started):
+            control.add(origin="gateway", event="control connection closed", conn=watch._conn(), gw=watch._gw(),
+                        lasted_s=round(time.monotonic() - started, 4), bytes_read_from_the_client_hex=[r.hex() for r in reads.sink])
+
+        def handle(c):
+            reads.sink, reads.address, reads.cmd = [], None, None
+            started = time.monotonic()
+            watch.safely(lambda: note_accepted(c))
             try:
                 return original_handle(c)
             finally:
-                control.add(event="control connection closed", conn=watch._conn(), gw=watch._gw(), lasted_s=round(time.monotonic() - started, 4),
-                            bytes_read_from_the_client_hex=[r.hex() for r in reads.sink])
+                watch.safely(lambda: note_closed(started))
+
+        def note_greeting(ok):
+            sink = reads.sink
+            record = {"origin": "gateway", "event": "greeting and authentication done", "ok": ok, "conn": watch._conn(), "gw": watch._gw(),
+                      "gateway_wants_credentials": gateway.user is not None,
+                      "methods_offered_by_the_client": list(sink[1])}
+            if gateway.user is not None and len(sink) >= 7:
+                record["user_sent"] = sink[4].decode("utf-8", "replace")
+                record["password_length_sent"] = len(sink[6])
+            control.add(**record)
 
         def greet(c):
             ok = original_greet(c)
-            sink = reads.sink
-            record = {"event": "greeting and authentication done", "ok": ok, "conn": watch._conn(), "gw": watch._gw(),
-                      "gateway_wants_credentials": gateway.user is not None}
-            try:
-                record["methods_offered_by_the_client"] = list(sink[1])
-                if gateway.user is not None and len(sink) >= 7:
-                    record["user_sent"] = sink[4].decode("utf-8", "replace")
-                    record["password_length_sent"] = len(sink[6])
-            except Exception as problem:
-                record["decode_error"] = repr(problem)
-            control.add(**record)
+            watch.safely(lambda: note_greeting(ok))
             return ok
 
-        def read_address(c):
-            host, port = original_read_address(c)
+        def note_request(host, port):
             header = next((r for r in reversed(reads.sink) if len(r) == 3 and r[0] == 5), b"")
             reads.cmd = {1: "CONNECT", 3: "UDP ASSOCIATE"}.get(header[1], "command %d" % header[1]) if len(header) == 3 else "unknown"
             reads.address = "%s:%d" % (host, port)
-            control.add(event="request", command=reads.cmd, address_declared_by_the_client=reads.address, conn=watch._conn(), gw=watch._gw())
+            control.add(origin="gateway", event="request", command=reads.cmd, address_declared_by_the_client=reads.address,
+                        conn=watch._conn(), gw=watch._gw())
+
+        def read_address(c):
+            host, port = original_read_address(c)
+            watch.safely(lambda: note_request(host, port))
             return host, port
 
         def connect(c, host, port):
-            control.add(event="CONNECT handled", target="%s:%d" % (host, port), conn=watch._conn(), gw=watch._gw())
+            watch.safely(lambda: control.add(origin="gateway", event="CONNECT handled", target="%s:%d" % (host, port),
+                                             conn=watch._conn(), gw=watch._gw()))
             return original_connect(c, host, port)
 
         def associate(c):
-            control.add(event="UDP ASSOCIATE handled", address_declared_by_the_client=getattr(reads, "address", None),
-                        associations_so_far=len(gateway.associations), conn=watch._conn(), gw=watch._gw())
+            watch.safely(lambda: control.add(origin="gateway", event="UDP ASSOCIATE handled",
+                                             address_declared_by_the_client=getattr(reads, "address", None),
+                                             associations_so_far=len(gateway.associations), conn=watch._conn(), gw=watch._gw()))
             return original_associate(c)
 
-        def send(c, data):
-            asked = watch._gw()
-            kind = getattr(gateway._local, "kind", None)
-            try:
-                original_send(c, data)
-            except BaseException as problem:
-                control.add(event="answer could not be sent", kind=kind, error=repr(problem), hex=data.hex(), conn=watch._conn(),
-                            asked_gw=asked, gw=watch._gw())
-                raise
-            record = {"event": "answer sent", "kind": kind, "hex": data.hex(), "conn": watch._conn(), "asked_gw": asked, "gw": watch._gw()}
-            if len(data) == 2:
+        def note_answer(data, asked, kind, problem):
+            record = {"origin": "gateway", "event": "answer sent" if problem is None else "answer could not be sent", "kind": kind,
+                      "hex": data.hex(), "conn": watch._conn(), "asked_gw": round(asked - gateway.t0, 4), "gw": watch._gw()}
+            if problem is not None:
+                record["error"] = repr(problem)
+            elif len(data) == 2:
                 record["what"] = ("method selection (0x00 none, 0x02 user/password, 0xff none acceptable)" if data[0] == 5 else
                                   "authentication status (0x00 accepted)")
                 record["value"] = data[1]
@@ -631,19 +661,34 @@ class _Watch:
                     watch.bnd_ports.add(port)
             control.add(**record)
 
+        def send(c, data):
+            asked = time.monotonic()
+            kind = getattr(gateway._local, "kind", None)
+            try:
+                original_send(c, data)
+            except BaseException as problem:
+                watch.safely(lambda problem=problem: note_answer(data, asked, kind, problem))
+                raise
+            watch.safely(lambda: note_answer(data, asked, kind, None))
+
+        def note_route(host, dport, atyp, payload, out_port, routed):
+            record = {"origin": "gateway", "event": "datagram dropped by the route (nothing is sent on)" if routed is None else "datagram routed",
+                      "gw": watch._gw(), "destination_in_the_header": "%s:%d" % (host, dport), "atyp": atyp, "payload_len": len(payload),
+                      "exit_socket_port": out_port}
+            if routed is not None:
+                record["sent_on_to"] = "%s:%d" % tuple(routed[0][:2])
+                record["answer_will_be_reported_as"] = None if routed[1] is None else "%s:%d" % tuple(routed[1][:2])
+            watch.udp.add(**record)
+
         def route(host, dport, atyp, payload, out_port, answer):
             routed = original_route(host, dport, atyp, payload, out_port, answer)
-            what = {"event": "datagram dropped by the route (nothing is sent on)" if routed is None else "datagram routed", "gw": watch._gw(),
-                    "destination_in_the_header": "%s:%d" % (host, dport), "atyp": atyp, "payload_len": len(payload), "exit_socket_port": out_port}
-            if routed is not None:
-                what["sent_on_to"] = "%s:%d" % routed[0]
-                what["answer_will_be_reported_as"] = None if routed[1] is None else "%s:%d" % routed[1]
-            watch.udp.add(source="gateway", **what)
+            watch.safely(lambda: note_route(host, dport, atyp, payload, out_port, routed))
             return routed
 
         def deliver(relay, to, host, port, payload):
-            watch.udp.add(source="gateway", event="answer handed to the relay socket for the client", gw=watch._gw(), to=str(to),
-                          reported_as_coming_from="%s:%d" % (host, port), payload_len=len(payload), payload_head_hex=payload[:2].hex())
+            watch.safely(lambda: watch.udp.add(origin="gateway", event="answer handed to the relay socket for the client", gw=watch._gw(),
+                                               to=str(to), reported_as_coming_from="%s:%d" % (host, port), payload_len=len(payload),
+                                               payload_head_hex=payload[:2].hex()))
             return original_deliver(relay, to, host, port, payload)
 
         for name, function in (("_handle", handle), ("_greet", greet), ("_read_address", read_address), ("_send", send),
@@ -657,6 +702,9 @@ class _Watch:
         watch, gateway, real = self, self.gateway, socket
         import _socks_servers as servers
 
+        def address_of(pair):
+            return "%s:%d" % tuple(pair[:2])           # an IPv6 address is a 4-tuple
+
         class Listening(real.socket):
             def _role(self):
                 try:
@@ -669,38 +717,53 @@ class _Watch:
                     return local, "relay socket (the BND address the client was told)"
                 return local, "datagram socket"
 
+            def _note_reset(self, problem):
+                if self.type == real.SOCK_DGRAM:
+                    watch.udp.add(origin="socket", event="recvfrom raised ConnectionResetError", gw=watch._gw(), error=repr(problem),
+                                  local=str(self._role()[0]))
+
+            def _note_received(self, data, peer):
+                if self.type != real.SOCK_DGRAM or not data:
+                    return
+                local, role = self._role()
+                record = {"origin": "socket", "event": "datagram received", "gw": watch._gw(), "on": role,
+                          "local": address_of(local) if local else None, "source": address_of(peer), "source_kind": watch._kind_of(peer[0]),
+                          "len": len(data), "head_hex": data[:24].hex()}
+                if role.startswith("relay"):
+                    skipped = len(data) < 10 or data[2] != 0
+                    record["skipped_by_the_gateway"] = skipped
+                    record["why"] = ("shorter than 10 bytes" if len(data) < 10 else "FRAG is not 0") if skipped else None
+                    record["source_refused_as_foreign"] = False     # the Gateway has no source filter: see the cells
+                watch.udp.add(**record)
+
+            def _note_send_failed(self, data, args, problem):
+                if self.type == real.SOCK_DGRAM and data:
+                    watch.udp.add(origin="socket", event="sendto failed", gw=watch._gw(), error=repr(problem), destination=str(args[-1]),
+                                  len=len(data), local=str(self._role()[0]))
+
+            def _note_sent(self, data, args):
+                if self.type != real.SOCK_DGRAM or not data:
+                    return
+                local, role = self._role()
+                watch.udp.add(origin="socket", event="datagram sent", gw=watch._gw(), on=role, local=address_of(local) if local else None,
+                              destination=address_of(args[-1]), len=len(data), head_hex=data[:24].hex())
+
             def recvfrom(self, *args):
                 try:
                     data, peer = super().recvfrom(*args)
                 except ConnectionResetError as problem:
-                    if self.type == real.SOCK_DGRAM:
-                        watch.udp.add(source="socket", event="recvfrom raised ConnectionResetError", gw=watch._gw(), error=repr(problem),
-                                      local=str(self._role()[0]))
+                    watch.safely(lambda problem=problem: self._note_reset(problem))
                     raise
-                if self.type == real.SOCK_DGRAM and data:
-                    local, role = self._role()
-                    record = {"event": "datagram received", "gw": watch._gw(), "on": role, "local": ("%s:%d" % local) if local else None,
-                              "source": "%s:%d" % peer, "source_kind": watch._kind_of(peer[0]), "len": len(data), "head_hex": data[:24].hex()}
-                    if role.startswith("relay"):
-                        skipped = len(data) < 10 or data[2] != 0
-                        record["skipped_by_the_gateway"] = skipped
-                        record["why"] = ("shorter than 10 bytes" if len(data) < 10 else "FRAG is not 0") if skipped else None
-                        record["source_refused_as_foreign"] = False     # the Gateway has no source filter: see the cells
-                    watch.udp.add(source="socket", **record)
+                watch.safely(lambda: self._note_received(data, peer))
                 return data, peer
 
             def sendto(self, data, *args):
                 try:
                     sent = super().sendto(data, *args)
                 except OSError as problem:
-                    if self.type == real.SOCK_DGRAM and data:
-                        watch.udp.add(source="socket", event="sendto failed", gw=watch._gw(), error=repr(problem), destination=str(args[-1]),
-                                      len=len(data), local=str(self._role()[0]))
+                    watch.safely(lambda problem=problem: self._note_send_failed(data, args, problem))
                     raise
-                if self.type == real.SOCK_DGRAM and data:
-                    local, role = self._role()
-                    watch.udp.add(source="socket", event="datagram sent", gw=watch._gw(), on=role, local=("%s:%d" % local) if local else None,
-                                  destination="%s:%d" % args[-1], len=len(data), head_hex=data[:24].hex())
+                watch.safely(lambda: self._note_sent(data, args))
                 return sent
 
         class Module:
@@ -729,25 +792,30 @@ class _Watch:
         except Exception as problem:
             self.cells["network_the_core_declares_to_the_engine"] = "not read: %r" % (problem,)
 
+    def _note_page_events(self, events):
+        for event in events:
+            self.page.add(**dict(event, origin="page", t=event.get("wall", 0) / 1000.0, m=None))
+
     def evaluate(self, page, script, argument):
         """``page.evaluate`` and, when the evidence is kept, the page's own view of the gather as ``page-view.jsonl``."""
         if not self.active:
             return page.evaluate(script, argument)
-        self.page.add(source="test", event="page.evaluate of the gather starts", stun=argument, wall_ms=round(time.time() * 1000), gw=self._gw())
+        self.safely(lambda: self.page.add(origin="test", event="page.evaluate of the gather starts", stun=argument,
+                                          wall_ms=round(time.time() * 1000), gw=self._gw()))
         try:
             res = page.evaluate(script, argument)
         except BaseException as problem:
-            self.page.add(source="test", event="page.evaluate raised", error=repr(problem), gw=self._gw())
+            self.safely(lambda problem=problem: self.page.add(origin="test", event="page.evaluate raised", error=repr(problem), gw=self._gw()))
             try:
-                for event in page.evaluate("() => window.__relayEvents || []"):
-                    self.page.add(source="page", t=event.get("wall", 0) / 1000.0, m=None, **event)
+                events = page.evaluate("() => window.__relayEvents || []")
+                self.safely(lambda: self._note_page_events(events))
             except Exception as again:
-                self.page.add(source="test", event="the page's events could not be read back", error=repr(again))
+                self.safely(lambda again=again: self.page.add(origin="test", event="the page's events could not be read back", error=repr(again)))
             raise
-        self.page.add(source="test", event="page.evaluate of the gather returned", wall_ms=round(time.time() * 1000), gw=self._gw())
-        for event in res.get("events", []):
-            self.page.add(source="page", t=event.get("wall", 0) / 1000.0, m=None, **event)
-        self.cells["page_result"] = {key: value for key, value in res.items() if key != "events"}
+        self.safely(lambda: self.page.add(origin="test", event="page.evaluate of the gather returned", wall_ms=round(time.time() * 1000),
+                                          gw=self._gw()))
+        self.safely(lambda: self._note_page_events(res.get("events", [])))
+        self.safely(lambda: self.cells.__setitem__("page_result", {key: value for key, value in res.items() if key != "events"}))
         return res
 
     def snapshot(self):
