@@ -31,11 +31,12 @@ import re
 import socket
 import ssl
 import threading
-import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+
+from invisible_core.jar import open_jar
 
 from _lab_egress import LAB_EGRESS_IP
 from _lab_pki import LabCa, add_ca_to_profile
@@ -194,10 +195,10 @@ class PageServer:
 
 def counter_address(firefox_binary):
     """The address the engine's launch counter fetches, read from the module the browser runs (the one constant of
-    `StealthLaunchCounter.sys.mjs`, inside `browser/omni.ja` beside the executable)."""
+    `StealthLaunchCounter.sys.mjs`, inside `browser/omni.ja` beside the executable), with the core's jar reader."""
     omni = Path(firefox_binary).resolve().parent / "browser" / "omni.ja"
-    with zipfile.ZipFile(omni) as archive:
-        source = archive.read("modules/StealthLaunchCounter.sys.mjs").decode("utf-8")
+    # The core's own reader (`invisible_core.jar`): the omni.ja of a PGO build is Mozilla's optimized jar, which zipfile refuses.
+    source = open_jar(omni).read("modules/StealthLaunchCounter.sys.mjs").decode("utf-8")
     found = re.findall(r'USAGE_PING_URL\s*=\s*"([^"]+)"', source)
     assert len(found) == 1, "the counter module of %s declares %d addresses: %s" % (omni, len(found), found)
     return found[0]
