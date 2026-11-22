@@ -34,7 +34,7 @@ import time
 import pytest
 
 from _e2e_verdicts import MDNS_RETRY_MS, opened_at_the_retry_problem
-from _evidence_with_files import FailureEvidenceWithFiles
+from _evidence_with_files import FailureEvidenceWithFiles, probe_machine, tee_browser_output
 from _mdns_listener import MdnsListener
 from test_webrtc_realness import _e2e_binary, _launch, candidates, decode_priority, host_candidates, is_mdns  # noqa: F401
 
@@ -72,11 +72,19 @@ _GATHER_JS = r"""async () => {
 # Two connections on one page, connected to each other in script (the loopback test many demos use).
 # ``events`` is the page's own timeline for the failure evidence (``at``: ``performance.now()`` since the start of the script, ``origin``:
 # ``performance.timeOrigin``, so the wall clock of an event is ``origin + at``): every ``icecandidate`` of both connections with the candidate string,
-# every state change, when each ``addIceCandidate`` was called and when it settled. It only listens: nothing waits on it.
+# every state change, when each ``addIceCandidate`` was called and when it settled. ``steps`` is the time after each of the four descriptions is set.
+# ``snapshots`` is what ``getStats`` says of BOTH connections when the wait is over (the failure point of a run that did not open or echo, and the end of
+# one that did): every local and remote candidate (type, address, port, protocol) and every candidate pair (state, nominated, the checks sent and
+# answered, the two candidate ids and what they are). A remote candidate of type ``host`` on pc1 is a name of pc2 that pc1 resolved, ``prflx`` alone is a
+# name that was never resolved, and many requests with no response are STUN checks that were lost, not an mDNS name. It only listens and reads: nothing
+# waits on it, and the connections are closed at the end, whatever happened, so that the engine's own timecard of each one can be printed.
 _LOOPBACK_JS = r"""async () => {
   const t0 = performance.now();
   const events = [];
-  const at = (what, extra) => { events.push(Object.assign({at: Math.round((performance.now() - t0) * 10) / 10, what}, extra || {})); };
+  const now = () => Math.round((performance.now() - t0) * 10) / 10;
+  const at = (what, extra) => { events.push(Object.assign({at: now(), what}, extra || {})); };
+  const steps = {};
+  const step = name => { steps[name] = now(); at(name); };
   const pc1 = new RTCPeerConnection(), pc2 = new RTCPeerConnection();
   for (const [name, pc] of [['pc1', pc1], ['pc2', pc2]]) {
     pc.addEventListener('icecandidate', e => at('icecandidate', {pc: name, candidate: e.candidate ? e.candidate.candidate : null}));
@@ -98,50 +106,77 @@ _LOOPBACK_JS = r"""async () => {
   pc1.addEventListener('icecandidate', e => keep('pc1', e));
   pc2.addEventListener('icecandidate', e => keep('pc2', e));
   const dc = pc1.createDataChannel('x');
-  let opened = null, echoed = false;
+  let opened = null, echoed = false, error = null;
   dc.onopen = () => { opened = Math.round(performance.now() - t0); at('datachannel open'); dc.send('ping'); };
   pc2.ondatachannel = ev => { at('datachannel announced on pc2'); ev.channel.onmessage = m => ev.channel.send('pong:' + m.data); };
   dc.onmessage = m => { echoed = (m.data === 'pong:ping'); at('datachannel echo', {echoed}); };
-  await pc1.setLocalDescription(await pc1.createOffer());
-  at('pc1 local description set');
-  await pc2.setRemoteDescription(pc1.localDescription);
-  await pc2.setLocalDescription(await pc2.createAnswer());
-  at('pc2 local description set');
-  await pc1.setRemoteDescription(pc2.localDescription);
-  at('pc1 remote description set');
-  // Until the channel has opened and echoed, for 30 s (the deadline of the wait). The loop also keeps the longest time it did not run: a page that
-  // was stopped by the machine says so, and the time the connection took is not judged then (`_e2e_verdicts.opened_at_the_retry_problem`).
-  const deadline = performance.now() + 30000;
-  let stalled = 0, last = performance.now();
-  while (performance.now() < deadline && !(opened !== null && echoed)) {
-    await new Promise(r => setTimeout(r, 5));
-    const now = performance.now();
-    stalled = Math.max(stalled, now - last);
-    last = now;
-  }
-  at('wait over', {opened, echoed});
-  // The road the connection took, read from the browser's own statistics: the nominated pair, and the protocol of each end.
-  let pair = null;
-  const pairs = [];
-  try {
-    const stats = await pc1.getStats();
+  // What a connection's statistics say now: its candidates and its candidate pairs, each pair with the two candidates it joins.
+  const readStats = async pc => {
+    const stats = await pc.getStats();
     const byId = {};
     stats.forEach(r => { byId[r.id] = r; });
+    const view = r => r ? {id: r.id, candidateType: r.candidateType, address: r.address, port: r.port, protocol: r.protocol, priority: r.priority} : null;
+    const out = {local: [], remote: [], pairs: []};
     stats.forEach(r => {
+      if (r.type === 'local-candidate') out.local.push(view(r));
+      if (r.type === 'remote-candidate') out.remote.push(view(r));
       if (r.type === 'candidate-pair') {
-        const l = byId[r.localCandidateId] || {}, rm = byId[r.remoteCandidateId] || {};
-        pairs.push({state: r.state, nominated: r.nominated, local: [l.protocol, l.candidateType, l.address, l.port],
-                    remote: [rm.protocol, rm.candidateType, rm.address, rm.port], requestsSent: r.requestsSent, responsesReceived: r.responsesReceived});
-      }
-      if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || !pair)) {
-        const l = byId[r.localCandidateId] || {}, rm = byId[r.remoteCandidateId] || {};
-        pair = {local: l.protocol, remote: rm.protocol, localType: l.candidateType, remoteType: rm.candidateType,
-                remoteAddress: rm.address || null};
+        out.pairs.push({id: r.id, state: r.state, nominated: r.nominated, requestsSent: r.requestsSent, responsesReceived: r.responsesReceived,
+                        requestsReceived: r.requestsReceived, responsesSent: r.responsesSent, localCandidateId: r.localCandidateId,
+                        remoteCandidateId: r.remoteCandidateId, local: view(byId[r.localCandidateId]), remote: view(byId[r.remoteCandidateId])});
       }
     });
+    return out;
+  };
+  const snapshot = async when => {
+    const one = {when, at: now()};
+    for (const [name, pc] of [['pc1', pc1], ['pc2', pc2]]) {
+      try { one[name] = await readStats(pc); } catch (e) { one[name] = {error: String(e)}; }
+    }
+    return one;
+  };
+  let stalled = 0;
+  try {
+    await pc1.setLocalDescription(await pc1.createOffer());
+    step('pc1 local description set');
+    await pc2.setRemoteDescription(pc1.localDescription);
+    step('pc2 remote description set');
+    await pc2.setLocalDescription(await pc2.createAnswer());
+    step('pc2 local description set');
+    await pc1.setRemoteDescription(pc2.localDescription);
+    step('pc1 remote description set');
+    // Until the channel has opened and echoed, for 30 s (the deadline of the wait). The loop also keeps the longest time it did not run: a page that
+    // was stopped by the machine says so, and the time the connection took is not judged then (`_e2e_verdicts.opened_at_the_retry_problem`).
+    const deadline = performance.now() + 30000;
+    let last = performance.now();
+    while (performance.now() < deadline && !(opened !== null && echoed)) {
+      await new Promise(r => setTimeout(r, 5));
+      const t = performance.now();
+      stalled = Math.max(stalled, t - last);
+      last = t;
+    }
+    at('wait over', {opened, echoed});
+  } catch (e) {
+    error = String(e);
+    at('error', {error});
+  }
+  // The road the connection took, read from the browser's own statistics: the nominated pair, and the protocol of each end.
+  const snapshots = [];
+  let pair = null;
+  try {
+    const final = await snapshot(error ? 'error' : 'wait over');
+    snapshots.push(final);
+    for (const p of (final.pc1 && final.pc1.pairs) || []) {
+      if (p.state === 'succeeded' && (p.nominated || !pair)) {
+        const l = p.local || {}, rm = p.remote || {};
+        pair = {local: l.protocol, remote: rm.protocol, localType: l.candidateType, remoteType: rm.candidateType, remoteAddress: rm.address || null};
+      }
+    }
   } catch (e) {}
-  pc1.close(); pc2.close();
-  return {opened, echoed, pair, gathered, stalled: Math.round(stalled), events, pairs, origin: performance.timeOrigin, started_at: Math.round(t0 * 10) / 10};
+  // Closed before the browser is: the engine prints a connection's timecard when the connection is destroyed.
+  try { pc1.close(); } catch (e) {}
+  try { pc2.close(); } catch (e) {}
+  return {opened, echoed, pair, gathered, stalled: Math.round(stalled), error, events, steps, snapshots, origin: performance.timeOrigin, started_at: Math.round(t0 * 10) / 10};
 }"""
 
 # Retail 159 on Windows, 12 cold launches (``captures/mdns-loopback/retail-159-win-12``): 37-52 ms in ten of twelve, two
@@ -158,8 +193,11 @@ RETAIL_MEDIAN_WINDOW_MS = (30, 55)       # printed beside the measure, for the r
 # log and of the transport layers (``MOZ_MTLOG_MODULE("mtransport")``, dom/media/webrtc/transport/nricectx.cpp:100, nriceresolver.cpp:67 ...), ML_DEBUG is level 5.
 # The engine's ``log`` crate is built with ``release_max_level_info`` (toolkit/library/rust/shared/Cargo.toml:41): a release engine keeps the info, warn and
 # error lines of the responder (the ``warn!`` of a failed send, a bad packet, an interface it could not use), not its ``trace!`` lines (questions, answers,
-# registrations). ``timestamp`` writes the wall clock (UTC) on each line, ``sync`` writes each line at once, ``rotate:30`` keeps at most 30 MB per process.
-MDNS_MOZ_LOG = "timestamp,sync,rotate:30,mdns_service::*:5,mtransport:5"
+# registrations); level 3 is info, the most such an engine has. ``timestamp`` writes the wall clock (UTC) on each line, ``sync`` writes each line at once.
+# ``signaling:1`` is not for its lines (level 1 is error) but because the PeerConnection makes its timecard only while that module is enabled
+# (PeerConnectionImpl.cpp:375, ``MOZ_LOG_TEST(logModuleInfo, LogLevel::Error)``, ``logModuleInfo`` is ``signaling``); the engine prints the timecard on the
+# stdout of the content process when the connection is destroyed (the same file, :449-453), and the launch's stdout is kept (``tee_browser_output``).
+MDNS_MOZ_LOG = "timestamp,sync,mdns_service::*:3,mtransport:5,signaling:1"
 
 
 def _session(declaration, socks, page_url, monkeypatch, seed, script, engine_log=None):
@@ -173,6 +211,8 @@ def _session(declaration, socks, page_url, monkeypatch, seed, script, engine_log
         os.makedirs(engine_log, exist_ok=True)
         monkeypatch.setenv("MOZ_LOG", MDNS_MOZ_LOG)
         monkeypatch.setenv("MOZ_LOG_FILE", os.path.join(engine_log, "engine-%PID.log"))
+        # The browser's stdout (the timecards of the content process, ``MDNS_MOZ_LOG``), next to its log files: ``engine-stdout.log``.
+        tee_browser_output(monkeypatch, os.path.join(engine_log, "engine-stdout.log"))
     prefs = {"network.proxy.allow_hijacking_localhost": True, "network.proxy.no_proxies_on": ""}
     proxy = {"server": "socks5://127.0.0.1:%d" % socks.port}
     with _launch(binary_path=binary, proxy=proxy, extra_prefs=prefs, seed=seed) as browser:
@@ -280,9 +320,22 @@ def test_two_connections_on_one_page_connect_in_the_time_of_retail(local_https_p
     neither is a verdict (an absolute time failed on both GitHub runners with a healthy engine)."""
     runs = []
     launches = []
-    # Failure evidence (tests/_evidence_with_files.py): per launch, the engine's own log (the mDNS responder and mtransport), kept only for the launch that
-    # fails; and ``launches.json``, the timings and the page's timeline of EVERY launch up to it (the loop stops at the first red).
+    # Failure evidence (tests/_evidence_with_files.py): per launch, the engine's own log (the mDNS responder and mtransport, one file per process) and the
+    # browser's stdout (``engine-stdout.log``, with the timecards), kept only for the launch that fails; ``machine-run-N.txt``, who holds UDP 5353 when a
+    # run is not right; and ``launches.json``, the timings and the page's timeline (events, the time after each description, the statistics of both
+    # connections) of EVERY launch up to it (the loop stops at the first red).
     with FailureEvidenceWithFiles("declared-host-two-connections-open-in-time") as evidence:
+        def loopback(n):
+            # The page's measure, and, while the browser is still up, who holds UDP 5353 on the machine when the run is not right
+            # (``machine-run-N.txt``; the verdicts below are what judge it, this only decides when to look).
+            def run(page):
+                res = page.evaluate(_LOOPBACK_JS)
+                if (not res["echoed"] or res["opened"] is None or not res["pair"]
+                        or opened_at_the_retry_problem(res["opened"], res["stalled"], MDNS_RETRY_MS) is not None):
+                    probe_machine(evidence.files / ("machine-run-%d.txt" % n))
+                return res
+            return run
+
         try:
             for n in range(5):
                 log_dir = evidence.files / ("engine-log-run-%d" % n)
@@ -294,13 +347,13 @@ def test_two_connections_on_one_page_connect_in_the_time_of_retail(local_https_p
                 listener = MdnsListener().start()
                 try:
                     res = _session(V4_ONLY, socks5_tcp_only, local_https_page, monkeypatch, 100 + n,
-                                   lambda page: page.evaluate(_LOOPBACK_JS), engine_log=str(log_dir))
+                                   loopback(n), engine_log=str(log_dir))
                 finally:
                     launch.update(returned_m=round(time.perf_counter(), 6), returned_t=round(time.time(), 4))
                     listener.stop()
                     listener.write(evidence.files / ("mdns-wire-run-%d.jsonl" % n))
                     launch["mdns_wire"] = listener.summary()
-                page_timeline = {key: res.pop(key, None) for key in ("events", "pairs", "origin", "started_at")}
+                page_timeline = {key: res.pop(key, None) for key in ("events", "steps", "snapshots", "error", "origin", "started_at")}
                 launch.update(opened=res["opened"], echoed=res["echoed"], stalled=res["stalled"], pair=res["pair"], gathered=res["gathered"],
                               page=page_timeline)
                 assert res["echoed"] and res["opened"] is not None, "run %d: the data channel did not open: %r" % (n, res)
