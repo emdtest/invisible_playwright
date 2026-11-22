@@ -31,7 +31,7 @@ of the engine series, hooks in `uriloader/exthandler/nsExternalHelperAppService.
 
 **A slow save is kept, not judged.** Firefox's own save of the last test has taken, on the runners, from about ten seconds to
 more than eighty for the same bytes: that is the product (a user's download would wait as long), so nothing of it is switched
-off. The seconds from the click to the file are recorded (a junit property), and a run slower than any healthy one
+off. The seconds from the click to the file are recorded (a junit property), and a run of about ten seconds or more
 (``SLOW_SAVE_S``, judged after the fact, never a verdict) keeps what says where the time went, in
 ``$RUNNER_TEMP/invpw-evidence/download-left-to-firefox/`` (``tests/_evidence_on_failure.py``, the same on a failure): the requests
 the test's server saw, with times; every request the client heard (request, response, requestfinished, requestfailed), with
@@ -56,15 +56,20 @@ from _waits import wait_until, watch
 
 BODY = b"invisible download body\n" * 64
 
-#: Seconds from the click to the file in Firefox's directory beyond which a run keeps its evidence: no healthy run comes near
-#: it. Judged after the fact, never a verdict (the test's deadline is the `watch` below).
-SLOW_SAVE_S = 40.0
+#: Seconds from the click to the file in Firefox's directory beyond which a run keeps its evidence. A file served from localhost
+#: that takes about ten seconds already needs an explanation, so the threshold sits just under ten. Judged after the fact, never a
+#: verdict (the test's deadline is the `watch` below).
+SLOW_SAVE_S = 8.0
 
 #: The engine's log of the download machinery, kept in the evidence: the external helper (`nsExternalHelperAppService.cpp`,
 #: `HelperAppService`), the URI loader that hands it the response (`URILoader`), the reputation check of a finished download
-#: (`ApplicationReputation`) and the url-classifier it asks (`UrlClassifierDbService`, `UrlClassifierStreamUpdater`).
+#: (`ApplicationReputation`) and the url-classifier it asks (`UrlClassifierDbService`, whose log also carries the C++ hash
+#: completer base, and `UrlClassifierStreamUpdater`), plus the network under them: the HTTP stack (`nsHttp`, the name of
+#: `gHttpLog` in `nsHttpHandler.cpp`) and the host resolver (`nsHostResolver`, `gHostResolverLog` in `nsHostResolver.cpp`).
+#: `UrlClassifierHashCompleter` is not a log module: that completer is JS (`UrlClassifierHashCompleter.sys.mjs`) and prints only
+#: under `browser.safebrowsing.debug`, a Safe Browsing pref this test never touches.
 DOWNLOAD_LOG = ("HelperAppService:5,URILoader:5,ApplicationReputation:5,UrlClassifierDbService:5,UrlClassifierStreamUpdater:5,"
-                "timestamp,sync")
+                "nsHttp:3,nsHostResolver:5,timestamp,sync")
 
 
 def _note(state, **fields):
@@ -308,7 +313,10 @@ def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, s
     where.mkdir()
     prefs = {"browser.download.folderList": 2,
              "browser.download.dir": str(where),
-             "browser.download.useDownloadDir": True}
+             "browser.download.useDownloadDir": True,
+             # the JS side of the download machinery (`DownloadsCommon.sys.mjs`, `HelperAppDlg.sys.mjs`: `maxLogLevelPref`), at its most
+             # verbose level (`all` in `Console.sys.mjs` LOG_LEVELS; the default in `all.js` is "Error")
+             "toolkit.download.loglevel": "All"}
     with FailureEvidence("download-left-to-firefox") as evidence:
         evidence.note_records("server-record", record)
         client = types.SimpleNamespace(lock=threading.Lock(), records=[])
