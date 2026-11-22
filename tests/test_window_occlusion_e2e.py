@@ -19,11 +19,15 @@ the first and X tells the first one it is fully obscured). Windows: opening the 
 ``ProcessComputeNativeWindowOcclusionStatusCallback``: ``it->second = (mUnoccludedDesktopRegion == currUnoccludedDestkop) ? OCCLUDED : VISIBLE``); the second
 window lands above the first only when the system lets its process take the foreground (``nsWindow::Show``: ``::ShowWindow(mWnd, SW_SHOWNORMAL)``, an
 activation the system's foreground rules may refuse to a process the foreground one did not start); and a later move of another process's window is heard only
-once that process was seen with a visible window (``RegisterEventHookForProcess``). So on Windows the test puts the covering in place itself, as a user who drags
-one window over the other: the first window goes right under the second one, inside its rectangle as the tracker reads it (a maximized window counts as its
-monitor's work area), in one ``SetWindowPos`` with ``SWP_NOACTIVATE``. That move of the first window is the tracker's own signal (``EVENT_OBJECT_LOCATIONCHANGE``
-of its process), and before waiting the test checks what the tracker checks: the second window visible, not minimized, not cloaked, not layered-transparent,
-not a popup, above the first, and the first window inside it. A red says which of these did not hold.
+once that process was seen with a visible window (``RegisterEventHookForProcess``). So on Windows the test puts the covering in place itself, in two
+``SetWindowPos`` calls that need no foreground right: first the second window becomes ``HWND_TOPMOST`` (the system keeps a topmost window above every
+non-topmost one, whoever has the foreground; a plain "insert after" from the test's process is a Z-order request the system may not keep), then the first window
+moves inside the second one's rectangle as the tracker reads it (a maximized window counts as its monitor's work area) with ``SWP_NOZORDER | SWP_NOACTIVATE``.
+That move, last, is the tracker's own signal (``EVENT_OBJECT_LOCATIONCHANGE`` of the first window's process). Right after, the test reads back ONCE what the
+tracker checks: the second window visible, not minimized, not cloaked, not layered-transparent, not a popup, above the first in the ``GW_HWNDPREV`` chain, and
+the first window inside it. Every red carries the two calls' results and ``GetLastError``, the Z-order from the top down to the first window (process, class,
+topmost), and the foreground window and its process, read once after the arrangement and again after the page has answered, so a covered window that something
+raised back is told from an arrangement the system refused.
 
 A page reads it from ``document.visibilityState`` and the ``visibilitychange`` event.
 """
@@ -33,7 +37,8 @@ import sys
 
 import pytest
 
-from _window_sessions import in_a_thread_of_its_own, launch, wait_for_condition
+from _waits import watch
+from _window_sessions import DEADLINE_S, in_a_thread_of_its_own, launch, wait_for_condition
 
 pytestmark = pytest.mark.e2e
 
@@ -69,8 +74,10 @@ def opens_the_covering_window(second):
 class Win32:
     """The user32/dwmapi calls that find the two windows and put one under the other, with the rules ``WinWindowOcclusionTracker`` reads them by."""
 
-    SWP_NOACTIVATE = 0x0010
-    GW_HWNDPREV = 3
+    SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0004, 0x0010
+    HWND_TOPMOST = -1
+    WS_EX_TOPMOST = 0x8
+    GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV = 0, 2, 3
     SW_MAXIMIZE = 3
     MONITOR_DEFAULTTONEAREST = 2
     DWMWA_CLOAKED = 14
@@ -91,6 +98,7 @@ class Win32:
         u = self.user32
         u.GetWindow.restype, u.GetWindow.argtypes = wintypes.HWND, (wintypes.HWND, wintypes.UINT)
         u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
         u.GetWindowLongW.restype, u.GetWindowLongW.argtypes = wintypes.LONG, (wintypes.HWND, ctypes.c_int)
         u.MonitorFromWindow.restype, u.MonitorFromWindow.argtypes = wintypes.HANDLE, (wintypes.HWND, wintypes.DWORD)
         u.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT)
@@ -197,46 +205,92 @@ class Win32:
             hwnd = self.user32.GetWindow(hwnd, self.GW_HWNDPREV)
         return False
 
-    def put_under(self, covered, cover):
-        """Moves ``covered`` right under ``cover`` in the Z-order, inside ``cover``'s rectangle and its work area, activating nothing."""
+    def set_window_pos(self, hwnd, after, x, y, cx, cy, flags):
+        """``SetWindowPos`` and what it answered: (return value, ``GetLastError``)."""
+        self.ctypes.set_last_error(0)
+        result = self.user32.SetWindowPos(hwnd, self.wintypes.HWND(after) if after is not None else None, x, y, cx, cy, flags)
+        return (result, self.ctypes.get_last_error())
+
+    def arrange(self, covered, cover):
+        """Makes ``cover`` topmost, then moves ``covered`` inside ``cover``'s rectangle and its work area; activates nothing. The calls' answers."""
+        calls = {"cover HWND_TOPMOST": self.set_window_pos(cover, self.HWND_TOPMOST, 0, 0, 0, 0, self.SWP_NOMOVE | self.SWP_NOSIZE | self.SWP_NOACTIVATE)}
         cl, ct, cr, cb = self.tracker_rect(cover)
         wl, wt, wr, wb = self.work_area(cover)
         left, top, right, bottom = max(cl, wl) + INSET, max(ct, wt) + INSET, min(cr, wr) - INSET, min(cb, wb) - INSET
         assert right - left > 2 * INSET and bottom - top > 2 * INSET, "no room inside the covering window %r (work area %r)" % (
             (cl, ct, cr, cb), (wl, wt, wr, wb))
-        moved = self.user32.SetWindowPos(covered, cover, left, top, right - left, bottom - top, self.SWP_NOACTIVATE)
-        assert moved, "SetWindowPos of the covered window failed (WinError %d)" % self.ctypes.get_last_error()
+        calls["covered moved inside"] = self.set_window_pos(covered, None, left, top, right - left, bottom - top, self.SWP_NOZORDER | self.SWP_NOACTIVATE)
+        return calls
+
+    def pid(self, hwnd):
+        pid = self.wintypes.DWORD()
+        self.user32.GetWindowThreadProcessId(hwnd, self.ctypes.byref(pid))
+        return pid.value
+
+    def describe(self, hwnd):
+        """(hwnd, process id, class, the start of the title, topmost) of one window."""
+        name, text = self.ctypes.create_unicode_buffer(256), self.ctypes.create_unicode_buffer(64)
+        self.user32.GetClassNameW(hwnd, name, 256)
+        self.user32.GetWindowTextW(hwnd, text, 64)
+        topmost = bool(self.user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE) & self.WS_EX_TOPMOST)
+        return (hwnd, self.pid(hwnd), name.value, text.value, "topmost" if topmost else "")
+
+    def z_order_down_to(self, lowest):
+        """The visible top-level windows from the top of the Z-order (``GW_HWNDFIRST``, then ``GW_HWNDNEXT``) down to ``lowest``."""
+        chain = []
+        hwnd = self.user32.GetWindow(lowest, self.GW_HWNDFIRST)
+        while hwnd:
+            if hwnd == lowest or self.user32.IsWindowVisible(hwnd):
+                chain.append(self.describe(hwnd))
+            if hwnd == lowest:
+                return chain
+            hwnd = self.user32.GetWindow(hwnd, self.GW_HWNDNEXT)
+        chain.append("(%r not reached)" % (lowest,))
+        return chain
 
     def coverage(self, covered, cover):
-        """What the tracker's calculation depends on, for the two windows; ``ok`` when the second one covers the first."""
+        """What the tracker's calculation depends on, for the two windows (``ok`` when the second one covers the first), with the Z-order and the
+        foreground window it was read in."""
         inner, outer = self.tracker_rect(covered), self.tracker_rect(cover)
         inside = outer[0] <= inner[0] and outer[1] <= inner[1] and inner[2] <= outer[2] and inner[3] <= outer[3]
         refused = self.why_it_cannot_cover(cover)
         above = self.above(cover, covered)
+        foreground = self.user32.GetForegroundWindow()
         return {"ok": inside and above and not refused, "covered": inner, "cover": outer, "inside": inside, "cover above": above,
                 "cover refused for": refused or None, "covered maximized": self.maximized(covered),
-                "foreground is the cover": self.user32.GetForegroundWindow() == cover}
+                "covered window": self.describe(covered), "cover window": self.describe(cover),
+                "foreground": self.describe(foreground) if foreground else None, "z-order": self.z_order_down_to(covered)}
 
 
-def covers_on_windows(covered):
-    """Windows only: finds the two windows, puts the covered one under the covering one, and checks the covering as the tracker reads it."""
-    win = Win32()
-    found = {}
-    for title in (COVERED_TITLE, COVER_TITLE):
-        seen = wait_for_condition(covered, lambda title=title: win.window_titled(title), lambda hwnd: hwnd is not None,
-                                  "no single visible top-level window is titled %r" % title)
-        found[title] = seen.history[-1][1]
-    first, cover = found[COVERED_TITLE], found[COVER_TITLE]
-    wait_for_condition(covered, lambda: win.why_it_cannot_cover(cover), lambda why: why == "",
-                       "the covering window is not one the tracker counts as covering")
-    win.put_under(first, cover)
-    seen = wait_for_condition(covered, lambda: win.coverage(first, cover), lambda state: state["ok"],
-                              "the second window does not cover the first one as the tracker reads them")
-    return seen.history[-1][1]
+class CoveringOnWindows:
+    """Windows only: finds the two windows, arranges the covering (``arrange``), and reads it back as the tracker reads it (``read``)."""
+
+    def __init__(self, covered) -> None:
+        self.win = Win32()
+        found = {}
+        for title in (COVERED_TITLE, COVER_TITLE):
+            seen = wait_for_condition(covered, lambda title=title: self.win.window_titled(title), lambda hwnd: hwnd is not None,
+                                      "no single visible top-level window is titled %r" % title)
+            found[title] = seen.history[-1][1]
+        self.first, self.cover = found[COVERED_TITLE], found[COVER_TITLE]
+        wait_for_condition(covered, lambda: self.win.why_it_cannot_cover(self.cover), lambda why: why == "",
+                           "the covering window is not one the tracker counts as covering")
+        self.calls = self.win.arrange(self.first, self.cover)
+        self.after_arrangement = self.read()
+        assert self.after_arrangement["ok"], "the second window does not cover the first one as the tracker reads them, read once right after %r: %r" % (
+            self.calls, self.after_arrangement)
+
+    def read(self):
+        return self.win.coverage(self.first, self.cover)
+
+    def evidence(self):
+        """The calls, the read-back right after them, and a read-back now: a covered window raised back after the arrangement shows here."""
+        return {"calls": self.calls, "after the arrangement": self.after_arrangement, "now": self.read()}
 
 
 def second_window_over_the_first(firefox_binary, tracking):
-    """(state, changes) of the first session's page after a second session's window is up over it.
+    """(state, changes, windows) of the first session's page after a second session's window is up over it; ``windows`` is the Windows evidence
+    of the covering (None elsewhere).
 
     ``tracking`` is None for the product as it launches, or the value both tracking prefs are given."""
     extra = None if tracking is None else {name: tracking for name in TRACKING_PREFS}
@@ -246,21 +300,27 @@ def second_window_over_the_first(firefox_binary, tracking):
         covered.evaluate(NAME, COVERED_TITLE)
         assert covered.evaluate(WATCH) == "visible", "the page was not visible before anything covered it"
         second.run(opens_the_covering_window)
-        windows = covers_on_windows(covered) if sys.platform == "win32" else None
+        covering = CoveringOnWindows(covered) if sys.platform == "win32" else None
         if tracking:
-            wait_for_condition(covered, lambda: covered.evaluate(STATE), lambda state: state == "hidden",
-                               "a window that another one covers never turned hidden with occlusion tracking enabled (windows: %r)" % (windows,))
+            seen = watch_state(covered)
+            assert seen.ok, "a window that another one covers never turned hidden with occlusion tracking enabled; seen: %s; windows: %r" % (
+                seen.render(), covering.evidence() if covering else None)
         else:
             covered.evaluate(TWO_FRAMES)
-        return covered.evaluate(STATE), covered.evaluate(CHANGES)
+        return covered.evaluate(STATE), covered.evaluate(CHANGES), covering.evidence() if covering else None
+
+
+def watch_state(covered):
+    """Until the covered page reads ``hidden`` (the deadline of ``wait_for_condition``), with what was seen on the way."""
+    return watch(lambda: covered.evaluate(STATE), lambda state: state == "hidden", DEADLINE_S, lambda: covered.wait_for_timeout(100))
 
 
 def test_a_covered_window_stays_visible_unless_occlusion_tracking_is_enabled(firefox_binary):
-    tracked_state, tracked_changes = second_window_over_the_first(firefox_binary, True)
+    tracked_state, tracked_changes, tracked_windows = second_window_over_the_first(firefox_binary, True)
     assert tracked_state == "hidden" and tracked_changes == ["visible", "hidden"], (
-        "control: with tracking enabled the covered page reads %r, changes %r" % (tracked_state, tracked_changes))
+        "control: with tracking enabled the covered page reads %r, changes %r; windows: %r" % (tracked_state, tracked_changes, tracked_windows))
 
-    state, changes = second_window_over_the_first(firefox_binary, None)
+    state, changes, windows = second_window_over_the_first(firefox_binary, None)
     assert state == "visible" and changes == ["visible"], (
-        "the product's covered page reads %r, changes %r: it must stay visible, with no visibilitychange" % (state, changes))
+        "the product's covered page reads %r, changes %r: it must stay visible, with no visibilitychange; windows: %r" % (state, changes, windows))
     assert state != tracked_state, "enabled and disabled read the same: the declaration decides nothing"
