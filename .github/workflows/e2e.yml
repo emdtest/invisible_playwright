@@ -113,6 +113,12 @@ jobs:
           sudo apt-get install -y xvfb
           # the fontconfig e2e trace the opens of the browser: strace is not in the runner image (setsid is, util-linux)
           sudo apt-get install -y strace
+          # tests/test_security_state_engine_e2e.py, on a crash of the engine: a core file where kernel.core_pattern says, and gdb to read it (the test deletes the core and
+          # uploads the backtrace with the evidence). Only a process that lifts its own core limit leaves a core, the runner's default limit is 0.
+          sudo apt-get install -y gdb
+          mkdir -p "$RUNNER_TEMP/invpw-cores"
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/invpw-cores/core.%e.%p"
+          echo "INVPW_CORE_DIR=$RUNNER_TEMP/invpw-cores" >> "$GITHUB_ENV"
           sudo "$(which python)" -m playwright install-deps firefox
       # The security state is a ready directory of the repository (ci/security-state/, a result with no data, the sha256 in ci/security-state.pin.json): with
       # STEALTHFOX_SECURITY_STATE set the core neither downloads nor generates one. BEFORE `fetch`, which makes the state present (it would download and generate it).
