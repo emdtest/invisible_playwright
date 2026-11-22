@@ -56,9 +56,16 @@ class _Page(BaseHTTPRequestHandler):
 
 
 def _goto_error(page, url):
-    """The text of the error a `goto` ends with (the test fails if it ends without one)."""
-    with pytest.raises(Exception) as ended:
-        page.goto(url, timeout=30_000)
+    """The text of the error a `goto` ends with (the test fails if it ends without one).
+
+    A failed `goto` is followed by Firefox's error page, a navigation of its own that commits after the call has
+    raised (on Windows, late enough to land inside the next `goto`, which then reads as "interrupted by another
+    navigation to" the refused address). The call is therefore made inside a wait for that navigation's
+    `framenavigated`: it returns only once the error page has committed and the frame is quiet.
+    """
+    with page.expect_event("framenavigated", timeout=30_000):
+        with pytest.raises(Exception) as ended:
+            page.goto(url, timeout=30_000)
     return str(ended.value)
 
 
