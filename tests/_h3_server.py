@@ -7,6 +7,9 @@ later one read `h3` (retail Firefox 159, native DNS in loopback: h2, h3, h3; beh
 came from: a connection that comes from anywhere but the relay of a gateway on this host (127.0.0.1) did not go through
 the proxy.
 
+A client that has a QUIC handshake in progress toward the server is served its next TCP connection only once that handshake has ended (``_QuicFirst``): a real network completes
+QUIC in 1 round trip and TCP+TLS in 2, and a browser takes the first connection that is ready.
+
 Needs `aioquic` and `h2` (pip install aioquic h2; the dev extra installs both).
 """
 from __future__ import annotations
@@ -21,7 +24,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from _ports import bind_tcp_and_hold_udp
 
@@ -50,6 +53,45 @@ def _certificate(address: str, directory: Path):
 #: The one document every path answers, over TCP and over QUIC.
 PAGE = b"<!doctype html><meta charset=utf-8><title>h3</title><p>ok</p>"
 
+class _QuicFirst:
+    """Keeps the order of a real network between the two connections a browser opens to one server: QUIC is ready after 1 round trip and TCP+TLS after 2, so the QUIC one is
+    taken. The Python QUIC server of the lab needs longer than TCP+TLS under load and would invert that. For a peer address that has a QUIC handshake in progress toward the
+    server, the TLS of a new TCP connection from that address waits until the handshake has ended. It waits for an event, never for a time: ``ended`` is called when the
+    handshake completes (the client has had its connection ready for a round trip by then), fails, or the connection terminates (the idle timeout is one of them), and
+    ``release_all`` when the server closes. With no handshake in progress for the address nothing is held."""
+
+    def __init__(self):
+        self._changed = threading.Condition()
+        self._in_progress: Dict[str, int] = {}
+        self._closed = False
+
+    def began(self, peer: str) -> None:
+        with self._changed:
+            self._in_progress[peer] = self._in_progress.get(peer, 0) + 1
+
+    def ended(self, peer: str) -> None:
+        with self._changed:
+            left = self._in_progress.get(peer, 0) - 1
+            if left > 0:
+                self._in_progress[peer] = left
+            else:
+                self._in_progress.pop(peer, None)
+            self._changed.notify_all()
+
+    def hold(self, peer: str, held: List[str]) -> None:
+        """Returns at once when no QUIC handshake of ``peer`` is in progress; otherwise records the hold in ``held`` and returns when none is."""
+        with self._changed:
+            if peer not in self._in_progress or self._closed:
+                return
+            held.append(peer)
+            self._changed.wait_for(lambda: self._closed or peer not in self._in_progress)
+
+    def release_all(self) -> None:
+        with self._changed:
+            self._closed = True
+            self._changed.notify_all()
+
+
 class _TcpServer(socketserver.ThreadingTCPServer):
     # On Windows SO_REUSEADDR is "share the port": with a number the picker drew (tests/_ports.py) it would bind over a listener that is there.
     allow_reuse_address = sys.platform != "win32"
@@ -72,6 +114,7 @@ class _TcpHandler(socketserver.BaseRequestHandler):
     def handle(self):
         owner = self.server.owner
         try:
+            owner._quic_first.hold(self.client_address[0], owner.tcp_held)
             self.request.settimeout(10)
             tls = owner._tls.wrap_socket(self.request, server_side=True)
         except (ssl.SSLError, OSError):
@@ -151,7 +194,7 @@ class H3Server:
         from aioquic.h3.connection import H3_ALPN, H3Connection
         from aioquic.h3.events import HeadersReceived
         from aioquic.quic.configuration import QuicConfiguration
-        from aioquic.quic.events import ProtocolNegotiated
+        from aioquic.quic.events import ConnectionTerminated, HandshakeCompleted, ProtocolNegotiated
 
         self.address = address
         #: The address each QUIC connection came from.
@@ -164,6 +207,9 @@ class H3Server:
         self.tcp_requests: List[str] = []
         #: The ALPN each TCP connection negotiated ("h2", or "http/1.1").
         self.tcp_alpn: List[str] = []
+        #: The peer address of each TCP connection whose TLS was held until a QUIC handshake of that address had ended (see ``_QuicFirst``).
+        self.tcp_held: List[str] = []
+        self._quic_first = _QuicFirst()
         self._dir = tempfile.TemporaryDirectory()
         cert, key = _certificate(address, Path(self._dir.name))
 
@@ -186,8 +232,29 @@ class H3Server:
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
                 self._http = None
+                #: The address whose handshake this connection holds open in ``_quic_first``; None before its first datagram and once the handshake has ended.
+                self._handshaking = None
+                self._began = False
+
+            def datagram_received(self, data, addr):
+                # The first datagram of a peer is the start of its handshake: it is registered before the server answers it.
+                if not self._began:
+                    self._began = True
+                    self._handshaking = addr[0]
+                    server._quic_first.began(addr[0])
+                super().datagram_received(data, addr)
+                # A close (the peer's, or ours after a failed handshake) ends the handshake before the event of the end of the connection.
+                if self._quic._close_event is not None:
+                    self._handshake_ended()
+
+            def _handshake_ended(self):
+                if self._handshaking is not None:
+                    peer, self._handshaking = self._handshaking, None
+                    server._quic_first.ended(peer)
 
             def quic_event_received(self, event):
+                if isinstance(event, (HandshakeCompleted, ConnectionTerminated)):
+                    self._handshake_ended()
                 if isinstance(event, ProtocolNegotiated):
                     self._http = H3Connection(self._quic)
                     peer = self._quic._network_paths[0].addr
@@ -237,6 +304,7 @@ class H3Server:
         return "https://%s:%d/" % (self.address, self.port)
 
     def close(self) -> None:
+        self._quic_first.release_all()
         self._tcp.shutdown()
         self._tcp.server_close()
         if not self._loop.is_closed():

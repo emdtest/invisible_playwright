@@ -140,6 +140,8 @@ def test_a_page_with_no_proxy_reads_h2_then_h3_then_h3(monkeypatch):
     with H3Server(this_host_address()) as server:
         assert not no_https_record(server.address), no_https_record(server.address)
         protocols, walls = _visits("direct", server, monkeypatch, egress_by_proxy(direct=EXIT_DIRECT))
+        # On a real network QUIC completes in 1 RTT and TCP+TLS in 2, so a browser with an Alt-Svc mapping takes QUIC; the lab server
+        # keeps that order (its TCP+TLS waits for the QUIC handshake of the same client, tests/_h3_server.py), so visits 2 and 3 read h3.
         problems = judge_visits("direct", protocols, walls)
         assert not problems, "; ".join(problems) + ". " + _report("direct", protocols, walls, server)
         assert server.quic_peers, "the h3 visits did not reach the server by QUIC"
