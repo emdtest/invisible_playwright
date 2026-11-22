@@ -1,11 +1,12 @@
 """A page loads the branding from the archive the core declares, with the
 content sandbox on.
 
-`chrome://branding/content/` and `resource://usercontext-content/branding/`
-are content-accessible, and what a page reads there tells a build from the
-retail one. The core declares where the files are (`zoom.stealth.branding.
-archive`, the zip of a set it ships or one of the caller's own, `pin=
-{"branding": <archive>}`); the engine serves them as `jar:` at the two places
+`chrome://branding/content/` is content-accessible, and what a page reads there
+tells a build from the retail one (`resource://usercontext-content/branding/`,
+the other place the engine serves the archive, is not readable by a page: it
+answers `error` to an image load, so it is not asserted). The core declares
+where the files are (`zoom.stealth.branding.archive`, the zip of a set it ships
+or one of the caller's own, `pin={"branding": <archive>}`); the engine serves them as `jar:` at the places
 that resolve those URIs (netwerk/protocol/res, `fingerprint/js-surface/
 branding`) and grants the content processes read access to exactly that file
 (Windows: `sandboxBroker.cpp`; Linux: `SandboxBrokerPolicyFactory.cpp`), for the
@@ -39,7 +40,6 @@ _FILE = "about-logo.png"
 
 URLS = {
     "chrome": "chrome://branding/content/" + _FILE,
-    "resource": "resource://usercontext-content/branding/" + _FILE,
 }
 
 LOAD = """async (urls) => {
@@ -99,9 +99,9 @@ def test_the_branding_a_page_loads_is_the_declared_archive(firefox_binary, fixtu
     retail = _size_in(branding_archive("official"))
     assert retail != list(_MINE), retail
     shipped = _load(firefox_binary, fixture_server + "/from-network", None)
-    assert shipped == {"chrome": retail, "resource": retail}, (shipped, retail)
+    assert shipped == {"chrome": retail}, (shipped, retail)
 
-    # Control: another declared archive is the one a page sees, through both ways.
+    # Control: another declared archive is the one a page sees.
     own = _load(firefox_binary, fixture_server + "/from-network", {"branding": str(_own_archive(tmp_path))})
-    assert own == {"chrome": list(_MINE), "resource": list(_MINE)}, own
+    assert own == {"chrome": list(_MINE)}, own
     assert own != shipped, (own, shipped)
