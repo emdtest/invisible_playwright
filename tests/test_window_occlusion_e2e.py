@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from _window_sessions import launch, wait_for_condition
+from _window_sessions import in_a_thread_of_its_own, launch, wait_for_condition
 
 pytestmark = pytest.mark.e2e
 
@@ -40,18 +40,23 @@ CHANGES = "() => window.__visibility"
 TWO_FRAMES = "() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))"
 
 
+def opens_the_covering_window(second):
+    """Runs in the second session's own thread: opens a window on the display and waits for two painted frames."""
+    cover = second.new_page()
+    cover.goto("about:blank")
+    cover.evaluate(TWO_FRAMES)
+
+
 def second_window_over_the_first(firefox_binary, tracking):
     """(state, changes) of the first session's page after a second session's window is up over it.
 
     ``tracking`` is None for the product as it launches, or the value both tracking prefs are given."""
     extra = None if tracking is None else {name: tracking for name in TRACKING_PREFS}
-    with launch(firefox_binary, extra_prefs=extra) as first, launch(firefox_binary) as second:
+    with launch(firefox_binary, extra_prefs=extra) as first, in_a_thread_of_its_own(firefox_binary) as second:
         covered = first.new_page()
         covered.goto("about:blank")
         assert covered.evaluate(WATCH) == "visible", "the page was not visible before anything covered it"
-        cover = second.new_page()
-        cover.goto("about:blank")
-        cover.evaluate(TWO_FRAMES)
+        second.run(opens_the_covering_window)
         if tracking:
             wait_for_condition(covered, lambda: covered.evaluate(STATE), lambda state: state == "hidden",
                                "a window that another one covers never turned hidden with occlusion tracking enabled")
