@@ -14,10 +14,11 @@ Engine hook: `fingerprint/screen-window/geometry` of the engine series (`nsGloba
 `GetScreenXY`, `GetMozInnerScreenX/Y`, with the content origin shift of `StealthScreenCoords`) and
 `fingerprint/screen-window/popup-position` (`nsWindowWatcher`, the default position of a popup).
 
-Negative control, in the same test: the same page in a launch with the engine OFF (`zoom.stealth.fpp.hw_seed` 0, a bare
-binary) reads the host's popup, which has no declared frame (a headless popup has none: outer == inner), so the sizes
-that the declaration adds are not there. The test asserts the two readings DIFFER, so a hook that stops answering from
-the declaration turns it red.
+Negative control, in the same test: the same page in a launch declared with a SECOND frame that no runner has (border 6,
+popup UI 53, default position 9). The popup reads that one (outer - inner = 12 x 59, screen 9, mozInnerScreen 15 x 62) and
+none of the first declaration's numbers, and the two readings DIFFER. The engine off is not the control: the declared frame
+is the one of a retail Windows window at scale 1.0, so on a Windows runner the host's own popup has the very same frame
+(measured: 16 x 80 with the engine off) and the test could not tell a hook that answers from one that does not.
 
 Why a page reads it: `outerWidth - innerWidth`, `screenX` and `mozInnerScreenX/Y` are one line each, and a popup whose
 frame is not a Windows frame is a browser that does not run on Windows. Linux and Windows run the same assertions: the
@@ -26,7 +27,8 @@ declaration, not the host, is what is read.
 from __future__ import annotations
 
 import pytest
-from _popup_geometry import ENGINE_OFF, frame_of_the_declaration, read_popup
+from _popup_geometry import (OTHER_BORDER, OTHER_FRAME, OTHER_POPUP_UI, OTHER_POSITION, frame_extra, frame_of_the_declaration,
+                             read_popup)
 
 pytestmark = pytest.mark.e2e
 
@@ -51,10 +53,23 @@ def test_a_popup_is_its_inner_size_plus_the_declared_frame(firefox_binary):
     assert on["my"] == pytest.approx(on["sy"] + frame.popup_ui, abs=0.01), (
         "mozInnerScreenY %r is not screenY %r plus the popup UI %d" % (on["my"], on["sy"], frame.popup_ui))
 
-    # The control: the engine off is the host's popup, and none of the declared relations holds.
-    off = read_popup(firefox_binary, extra_prefs=ENGINE_OFF)["popup"]
-    assert (off["ow"] - off["iw"], off["oh"] - off["ih"]) != declared, (
-        "with the engine off the popup also reads the declared frame %r: the control reads the declaration, so the "
-        "test cannot tell a hook that answers from one that does not" % (declared,))
-    assert abs(off["my"] - off["sy"] - frame.popup_ui) > 0.01, (
-        "with the engine off mozInnerScreenY is also screenY + %d: the control reads the declaration" % frame.popup_ui)
+    # The control: a launch declared with another frame reads that one, and none of the first declaration's relations.
+    other_declared = frame_extra(OTHER_BORDER, OTHER_POPUP_UI)
+    assert other_declared != declared
+
+    def has_the_other_frame(reading):
+        p = reading["popup"]
+        return (p["ow"] - p["iw"], p["oh"] - p["ih"]) == other_declared
+
+    other = read_popup(firefox_binary, extra_prefs=OTHER_FRAME, ready=has_the_other_frame)["popup"]
+    assert (other["ow"] - other["iw"], other["oh"] - other["ih"]) == other_declared, (
+        "declared with another frame the popup reads outer %dx%d for inner %dx%d: the frame is %r, the second declaration is %r"
+        % (other["ow"], other["oh"], other["iw"], other["ih"], (other["ow"] - other["iw"], other["oh"] - other["ih"]), other_declared))
+    assert (other["sx"], other["sy"]) == (OTHER_POSITION, OTHER_POSITION), (
+        "declared with another default position the popup reads screen %r, the second declaration is %d" % ((other["sx"], other["sy"]), OTHER_POSITION))
+    assert other["mx"] == pytest.approx(other["sx"] + OTHER_BORDER, abs=0.01)
+    assert other["my"] == pytest.approx(other["sy"] + OTHER_POPUP_UI, abs=0.01)
+    assert (other["ow"] - other["iw"], other["oh"] - other["ih"]) != (on["ow"] - on["iw"], on["oh"] - on["ih"]), (
+        "the two declared frames read the same frame: the declaration decides nothing")
+    assert (other["sx"], other["sy"]) != (on["sx"], on["sy"]) and other["my"] - other["sy"] != on["my"] - on["sy"], (
+        "the two declared frames read the same position or content origin: %r vs %r" % (other, on))
