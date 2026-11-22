@@ -33,26 +33,22 @@ IPv6 route answers `ENETUNREACH`, the same `NS_ERROR_CONNECTION_REFUSED` as the 
 declared-off launch and behind the proxy. The port is 80: Firefox bans port 9 (discard) before any connect, so a fetch to it never reaches the gate.
 
 Hermetic: a local listener, a local SOCKS5 gateway of `tests/_socks_servers.py` that maps the documentation address to the listener and forwards
-NOTHING else: the browser's own background traffic also arrives at the gateway, and every CONNECT to an address that is not the lab's is refused
-(reply 5) and recorded. Every request, refused or carried, is recorded with its time since the launch, its SOCKS5 address type, its destination as received and
-its port. The refused list is written, always, under `$RUNNER_TEMP/invpw-evidence/` (the folder the e2e jobs upload), so that a reader sees
-what the browser asked for besides the literal.
+NOTHING else: the browser's own background traffic also arrives at the gateway, and every CONNECT that is not the one carried to the listener is refused
+(reply 2) and recorded. Every gateway of that module is hermetic the same way (it carries only the lab's, see its docstring); this one is narrower still:
+the lab for it is the listener alone. Every request, refused or carried, is recorded with its time since the launch, its SOCKS5 address type, its destination
+as received and its port. The refused list is written, always, when the gateway is closed, under `$RUNNER_TEMP/invpw-evidence/` (the folder the e2e jobs
+upload), so that a reader sees what the browser asked for besides the literal.
 """
 from __future__ import annotations
 
-import json
-import os
-import pathlib
-import socket
 import socketserver
-import struct
 import threading
 import time
 
 import pytest
 
 from _servers import LocalServer
-from _socks_servers import EXIT, Gateway, _recv_exact
+from _socks_servers import EXIT, Gateway
 from _udp_line import egress_by_proxy, measure_servers
 from _waits import wait_until
 from test_declared_host_network_e2e import DUAL, NETWORK_ENV, V4_ONLY
@@ -66,8 +62,6 @@ DOCUMENTATION_HTTP = 80
 REFUSED = "NS_ERROR_CONNECTION_REFUSED"
 #: SOCKS5 address type of an IPv6 address (RFC 1928); 1 is IPv4, 3 a domain name.
 ATYP_IPV6 = 4
-#: The folder under ``$RUNNER_TEMP`` the e2e workflows upload (``invpw-evidence-*``).
-EVIDENCE_FOLDER = "invpw-evidence"
 #: The deadline of a fetch that must END (refused, or carried): far beyond a healthy run; what the page reads on a timeout is a `TimeoutError`, never a verdict.
 FETCH_SECONDS = 30
 
@@ -113,14 +107,15 @@ class _Listener:
 class _GatewayToALocalListener(Gateway):
     """The SOCKS5 gateway of the tests (UDP refused) that carries the documentation address to a local listener and forwards nothing else: the destination
     it is asked for is what it records in ``connects`` (with its SOCKS5 address type in ``addresses``), what the listener hears is what it carried, and
-    every CONNECT to an address that is not the lab's is refused and recorded in ``refused``."""
+    every CONNECT that is not carried to the listener is refused (the base gateway refuses what is not the lab's; here the lab is the listener alone) and
+    recorded in ``refused``."""
+
+    evidence_name = "ipv6-literal-refused-connects"
 
     def __init__(self, carried: dict) -> None:
         self._carried = dict(carried)
         #: Every address of a request the gateway read, as (host, port, address type), in order.
         self.addresses: list = []
-        #: Every CONNECT that was not the lab's and was refused (reply 5, connection refused), as (host, port), in order.
-        self.refused: list = []
         #: Every request, as a dict, for the evidence file: ``t`` (seconds, monotonic, since ``launch_started``), ``atyp`` (SOCKS5 address type: 1 IPv4,
         #: 3 domain name, 4 IPv6), ``destination`` (as received: the NAME when the type is 3), ``port``, ``outcome``.
         self.records: list = []
@@ -128,23 +123,18 @@ class _GatewayToALocalListener(Gateway):
         self._current = threading.local()
         super().__init__(udp="refuse", tcp_exit=EXIT, udp_exit=EXIT)
 
-    @staticmethod
-    def _address_of(c: socket.socket):
-        atyp = _recv_exact(c, 1)[0]
-        if atyp == 1:
-            host = socket.inet_ntoa(_recv_exact(c, 4))
-        elif atyp == 3:
-            host = _recv_exact(c, _recv_exact(c, 1)[0]).decode()
-        else:
-            host = socket.inet_ntop(socket.AF_INET6, _recv_exact(c, 16))
-        return host, struct.unpack("!H", _recv_exact(c, 2))[0], atyp
+    @property
+    def refused(self) -> list:
+        """Every CONNECT that was refused, as (destination as received, port), in order."""
+        return self.guard.refused("tcp")
 
     def launch_started(self) -> None:
         """Call just before the launch of the browser behind this gateway: the origin of the times of ``records``."""
         self._launch_t0 = time.monotonic()
 
-    def _read_address(self, c: socket.socket):
-        host, port, atyp = self._address_of(c)
+    def _read_address(self, c):
+        host, port = super()._read_address(c)
+        atyp = self._local.atyp
         self.addresses.append((host, port, atyp))
         record = {"t": round(time.monotonic() - self._launch_t0, 3), "atyp": atyp, "destination": host, "port": port,
                   "outcome": "answered by the lab (or not a CONNECT)"}
@@ -155,30 +145,21 @@ class _GatewayToALocalListener(Gateway):
     def _target(self, host: str, port: int):
         return self._carried.get((host, port), (host, port))
 
-    def _open_upstream(self, target):
-        if target not in self._carried.values():
-            self.refused.append(target)
+    def _admits(self, host, port, atyp, protocol, target=None):
+        if (target or (host, port)) not in self._carried.values():
+            self.guard.refuse(host, port, atyp, protocol)
             self._current.record["outcome"] = "refused"
-            raise OSError("the lab forwards nothing outside the lab: %s:%d" % target)
+            return False
         self._current.record["outcome"] = "carried to the listener of the lab"
-        return super()._open_upstream(target)
+        return super()._admits(host, port, atyp, protocol, target)
+
+    def _evidence(self) -> dict:
+        """The refusals are written by the base gateway at the close, with every request of the launch, so that a reader sees what the browser asked for."""
+        return {"requests": self.records}
 
     def documentation_connects(self) -> list:
         """Every request of the navigation to the documentation destination, in whatever shape it arrived: the host is told by its digits."""
         return [(host, port, atyp) for host, port, atyp in self.addresses if "2001:db8" in host.lower()]
-
-
-def _write_refused(gateway: "_GatewayToALocalListener") -> None:
-    """What the gateway refused, always (a few lines): under ``$RUNNER_TEMP/invpw-evidence/`` the e2e jobs upload. Off a runner nothing is written."""
-    runner_temp = os.environ.get("RUNNER_TEMP")
-    if not runner_temp:
-        return
-    folder = pathlib.Path(runner_temp) / EVIDENCE_FOLDER / "ipv6-literal-refused-connects" / ("%d-%d" % (os.getpid(), int(time.time() * 1000)))
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "refused-connects.json").write_text(json.dumps({
-        "refused": ["%s:%d" % target for target in gateway.refused],
-        "requests": gateway.records,
-    }, indent=2), encoding="utf-8")
 
 
 def _launch(firefox_binary, gateway=None):
@@ -243,8 +224,7 @@ def test_a_direct_ipv6_literal_is_refused_and_one_behind_socks_is_left_to_the_pr
                 wait_until(lambda: behind.connections, FETCH_SECONDS, lambda: page.wait_for_timeout(50))
             documentation = gateway.documentation_connects()
         finally:
-            gateway.close()
-            _write_refused(gateway)
+            gateway.close()            # writes what it refused and every request, under $RUNNER_TEMP/invpw-evidence/
 
     # The listener is real: its IPv4 literal reaches it, once per launch.
     for name, seen in (("declared off", off), ("declared on", on)):
