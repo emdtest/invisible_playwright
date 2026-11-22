@@ -41,7 +41,7 @@ import threading
 
 import pytest
 
-from _waits import wait_until
+from _waits import wait_until, watch
 
 BODY = b"invisible download body\n" * 64
 
@@ -247,7 +247,7 @@ def test_a_canceled_download_reports_once_as_canceled(firefox_binary, held_site)
 
 
 @pytest.mark.e2e
-def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, served, tmp_path):
+def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, served, tmp_path, record_property):
     """The negative control of the interception: the same context, the same link, the same file.
 
     With its options the download is taken (announced, saved in the wrapper's directory). After
@@ -257,9 +257,14 @@ def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, s
 
     where = tmp_path / "firefox"
     where.mkdir()
+    # Firefox's own path asks `ApplicationReputation` about a finished download before the saved file takes its name (`.bin` is a binary
+    # type), and that work is on the url-classifier, not on the download: on the runners this test took ~12 s or ~87 s for the same bytes.
+    # This test is about WHERE the file goes, so the check is not part of it: with these prefs Firefox saves what it was given.
     prefs = {"browser.download.folderList": 2,
              "browser.download.dir": str(where),
-             "browser.download.useDownloadDir": True}
+             "browser.download.useDownloadDir": True,
+             "browser.safebrowsing.downloads.enabled": False,
+             "browser.safebrowsing.malware.enabled": False}
     with InvisiblePlaywright(seed=4242, binary_path=firefox_binary, headless=True,
                              extra_prefs=prefs) as browser:
         context = browser.new_context(accept_downloads=True)
@@ -290,8 +295,11 @@ def test_a_context_without_download_options_is_left_to_firefox(firefox_binary, s
         # so the click does not wait for it; the end of the test waits on the CONDITION, the file in Firefox's directory.
         page.click("#dl", no_wait_after=True, timeout=30_000)
         landed = where / "report.bin"
-        assert wait_until(lambda: landed.exists() and landed.read_bytes() == BODY, 120,
-                          pump=lambda: page.wait_for_timeout(100)), os.listdir(str(where))
+        landing = watch(lambda: landed.exists() and landed.read_bytes() == BODY, bool, 120,
+                        pump=lambda: page.wait_for_timeout(100))
+        # not a verdict: how long Firefox's own save took, so a slow run says whether it was the save or the close that was slow
+        record_property("seconds_until_the_file_landed", "%.1f" % landing.took)
+        assert landing.ok, os.listdir(str(where))
 
         assert len(_of(events, "Browser.downloadCreated")) == 1, "the engine took a download of a context with no options"
         assert len(_of(events, "Browser.downloadFinished")) == 1, events
