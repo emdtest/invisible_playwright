@@ -13,7 +13,8 @@ What the test does. A NEW profile directory, a session on it. It waits on the CO
 condition "the parent reports a non-zero `memmapped-written-cache`" (the file appears when the write is moved into place and is adopted a moment after).
 It asserts, for that session: `memmapped-written-cache` equals the size of the file (non-zero), and `heap/saved-scripts` is below the size of the file (the
 heap copies are gone: without the hook it is about the size of the file). Then the SAME profile is opened again (warm): `memmapped-cache` equals the size of
-the file the session started with, and `memmapped-written-cache` is 0 unless the session wrote the cache again, in which case it equals the new size.
+the file the session started with (the file is mapped under the name `scriptCache-current.bin`: a warm session moves `scriptCache.bin` aside when it opens it), and
+`memmapped-written-cache` is 0 unless the session wrote the cache again, in which case `scriptCache.bin` is back and it equals the new size.
 
 Negative control: the warm session of the same profile. The fresh and the warm session differ in the two reporters in the way described (written is the size
 of the file in one and 0 in the other, read is 0 in one and the size in the other), so the reading cannot give the same number whatever the engine does.
@@ -117,7 +118,11 @@ def test_a_fresh_profile_reports_its_written_cache_as_mapped(firefox_binary, mon
             page.goto("about:blank", timeout=60_000)
             marionette = _open_marionette(port)
             warm = _reports(marionette)
-            now = cache.stat().st_size
+            # A warm session MOVES the file it found to `scriptCache-current.bin` when it opens the cache (`ScriptPreloader::OpenCache`) and maps that
+            # one; `scriptCache.bin` is there again only once this session has written a cache of its own (about 3 s after the startup, and only if
+            # it has something to save). So the file of this session is absent until then, and nothing is reported as written until it exists
+            # (`WriteCache` moves the file into place BEFORE it adopts it, so a report that carries a written cache finds the file here).
+            now = cache.stat().st_size if cache.exists() else 0
     finally:
         if marionette is not None:
             marionette.close()
