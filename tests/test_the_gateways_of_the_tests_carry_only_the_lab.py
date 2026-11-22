@@ -18,6 +18,8 @@ a verdict would then depend on whether the runner reaches them. What this holds,
 * the interfaces of this host: read by ``psutil.net_if_addrs`` in every form it gives (a zone id, upper case, an IPv4-mapped address, an interface with
   no IPv4); a reading that fails (``psutil`` raises or does not import, ``_witness`` does not import, an entry is not an address, no address at all)
   RAISES, in the gateway and in the witness, and is never an empty list (an empty list made every address of this host "not the lab's", silently);
+  a guard reads them ONCE, when it is made, and judges every destination against that reading (a browser behind a gateway retried a refused DoH
+  hundreds of times per test, and each refusal read the interfaces of the host again in the process of the measurement);
 * every refusal says its reason (the lab's rule, or the narrower one of the gateway: the DoH gateway refuses an address of this host by its own rule),
   and the record says once, per gateway, the interfaces it read and how.
 
@@ -512,7 +514,7 @@ def test_the_forms_psutil_gives_on_windows_are_read_as_the_addresses_they_are_an
     assert written["host_interfaces"]["interfaces"] == {
         "Ethernet": ["10.1.0.52", "fe80::1c2d:3a5b"], "Loopback Pseudo-Interface 1": ["::1", "127.0.0.1"],
         "vEthernet (nat)": ["10.1.0.53"], "Teredo Tunneling Pseudo-Interface": ["2001:0:2851:782c::1"]}
-    assert "psutil.net_if_addrs()" in written["host_interfaces"]["read_by"] and written["host_interfaces_read_errors"] == []
+    assert "psutil.net_if_addrs()" in written["host_interfaces"]["read_by"]
 
 
 def test_every_refusal_says_its_reason_and_the_doh_gateway_refuses_an_address_of_this_host_by_its_own_rule(monkeypatch):
@@ -536,7 +538,7 @@ def test_every_refusal_says_its_reason_and_the_doh_gateway_refuses_an_address_of
             s.close()
             assert code == 2
         assert [(r["destination"], r["reason"]) for r in gateway.guard.records] == [
-            (PUBLIC_V4, "8.8.8.8 is not loopback, not in a documentation range and not one of the 2 addresses of this host's interfaces read at the decision"),
+            (PUBLIC_V4, "8.8.8.8 is not loopback, not in a documentation range and not one of the 2 addresses of this host's interfaces read when the gateway was made"),
             (NAME, "a name that is not localhost: a gateway of the tests resolves no name, the question would leave the machine")]
         assert is_lab_destination("10.1.0.52")
         written = gateway.guard.evidence()
@@ -544,23 +546,44 @@ def test_every_refusal_says_its_reason_and_the_doh_gateway_refuses_an_address_of
             r["reason"] for r in gateway.guard.records]
 
 
-def test_a_reading_that_fails_at_a_decision_refuses_says_so_and_the_close_raises(monkeypatch):
-    from _witness import HostInterfacesUnreadable
+class _CountingPsutil(_FakePsutil):
+    """A ``psutil`` that counts how many times the interfaces were listed."""
 
-    monkeypatch.setattr(servers, "_own_interfaces", lambda: {"lo": ["127.0.0.1"]})
-    gateway = coherent()
+    def __init__(self, table):
+        super().__init__(table)
+        self.readings = 0
 
-    def broken():
-        raise HostInterfacesUnreadable("psutil.net_if_addrs() failed")
+    def net_if_addrs(self):
+        self.readings += 1
+        return super().net_if_addrs()
 
-    monkeypatch.setattr(servers, "_own_interfaces", broken)
-    s, code = _connect(gateway.port, "10.1.0.52", 443, V4)
-    s.close()
-    assert code == 2
-    assert "could not be read at the decision" in gateway.guard.records[0]["reason"] and gateway.guard.read_errors
-    with pytest.raises(HostInterfacesUnreadable):
-        gateway.close()
-    gateway.close()     # once: the second close neither writes nor raises
+
+#: The address of the DoH the core declares (``network.trr.bootstrapAddr``): a gateway of the lab refuses it, and the browser behind it retries.
+DECLARED_DOH = "162.159.61.4"
+
+
+def test_a_guard_reads_the_interfaces_once_however_many_destinations_it_refuses(monkeypatch):
+    """A gateway of the gate refused 117 and 254 CONNECTs to the declared DoH in two single tests (2296 in one leg): each refusal read the interfaces of
+    the host again (``psutil.net_if_addrs``) in the process that runs the core's UDP measurement. The guard reads them once, when it is made, and judges
+    every destination against that reading, so N refusals are N records and one reading, and the reason says when the reading was made."""
+    psutil = _CountingPsutil(WINDOWS_LIKE)
+    _real_interfaces(monkeypatch, psutil)
+    refusals = 40
+    with coherent() as gateway:
+        assert psutil.readings == 1, "the guard reads the interfaces when it is made: %d readings" % psutil.readings
+        gateway._open_upstream = lambda target: pytest.fail("the gateway opened a connection to %s" % (target,))
+        for _ in range(refusals):
+            s, code = _connect(gateway.port, DECLARED_DOH, 443, V4)
+            s.close()
+            assert code == 2
+        assert gateway.guard.refused("tcp") == [(DECLARED_DOH, 443)] * refusals
+        # an address of an interface is still the lab's, judged against the same reading; a datagram is judged the same way
+        assert gateway.guard.admits("10.1.0.52", 443, V4, "tcp") and gateway.guard.admits("fe80::1c2d:3a5b", 443, V6, "udp")
+        assert not gateway.guard.admits(PUBLIC_V4, 443, V4, "udp")
+        assert psutil.readings == 1, "the interfaces of the host were read %d times for %d refusals and 3 decisions; once, when the guard was "             "made, is the rule" % (psutil.readings, refusals)
+        assert {r["reason"] for r in gateway.guard.records if r["destination"] == DECLARED_DOH} == {
+            "162.159.61.4 is not loopback, not in a documentation range and not one of the 6 addresses of this host's interfaces read when the gateway"
+            " was made"}
 
 
 def test_a_witness_that_cannot_read_the_interfaces_again_keeps_the_arrival_and_raises_when_read(monkeypatch):
