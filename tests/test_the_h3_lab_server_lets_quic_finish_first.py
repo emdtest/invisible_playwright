@@ -192,3 +192,33 @@ def test_a_quic_handshake_of_another_address_holds_nothing():
         finally:
             client.close()
     assert order == ["tcp_tls"], order
+
+
+def test_a_client_that_starts_a_quic_handshake_and_vanishes_holds_the_tcp_connection_until_the_quic_idle_timeout():
+    """The residual case of the order (``_QuicFirst``): the client sends its first QUIC flight and then nothing (no CONNECTION_CLOSE). A TCP+TLS connection from the same IP is
+    held, and it goes on only when the server's QUIC idle timeout ends that QUIC connection. The order is asserted, not a duration: the server's QUIC idle timeout is set to about 1 s
+    only to keep the test short (the default is 60 s)."""
+    with H3Server("127.0.0.1", quic_idle_timeout=1.0) as server:
+        order = []
+        ended = server._quic_first.ended
+
+        def ended_after_noting(peer):
+            # Written before the TCP connection is released, so the order of the two lines is the order of the facts.
+            order.append("quic_terminated")
+            ended(peer)
+
+        server._quic_first.ended = ended_after_noting
+        client = _QuicClient(server)
+        done = threading.Event()
+        try:
+            client.send_first_flight()
+            client.server_has_answered()
+            _tcp_tls(server, order, done)
+            assert wait_until(lambda: server.tcp_held, DEADLINE, lambda: done.wait(0.01)), "the TCP connection was not held by the QUIC handshake in progress"
+            assert done.wait(DEADLINE), "the TCP connection was never served after the QUIC idle timeout"
+        finally:
+            client.close()
+        closed = [line for line in server.record if line["kind"] == "quic_close"]
+    assert order == ["quic_terminated", "tcp_tls"], (
+        "the TCP+TLS connection went on before the QUIC connection of the vanished client was terminated, or the QUIC one was never terminated: %s" % order)
+    assert closed and "idle" in str(closed[0]["reason"]).lower(), "the QUIC connection did not end by the idle timeout: %s" % closed

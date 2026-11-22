@@ -65,7 +65,12 @@ class _QuicFirst:
     taken. The Python QUIC server of the lab needs longer than TCP+TLS under load and would invert that. For a peer address that has a QUIC handshake in progress toward the
     server, the TLS of a new TCP connection from that address waits until the handshake has ended. It waits for an event, never for a time: ``ended`` is called when the
     handshake completes (the client has had its connection ready for a round trip by then), fails, or the connection terminates (the idle timeout is one of them), and
-    ``release_all`` when the server closes. With no handshake in progress for the address nothing is held."""
+    ``release_all`` when the server closes. With no handshake in progress for the address nothing is held.
+
+    The residual case: a client that starts a QUIC handshake and vanishes without a CONNECTION_CLOSE leaves its handshake in progress, so the TCP connections of the same
+    IP are held until the QUIC idle timeout ends the connection (aioquic: 60 s by default, ``H3Server(quic_idle_timeout=...)``). A real network does not hold the TCP of a
+    client for that long, but a client of the lab that opens QUIC and goes away is not one a test of the lab depends on; it is measured, with the order asserted and not a
+    duration, in tests/test_the_h3_lab_server_lets_quic_finish_first.py."""
 
     def __init__(self):
         self._changed = threading.Condition()
@@ -203,7 +208,8 @@ class _TcpHandler(socketserver.BaseRequestHandler):
 class H3Server:
     """TCP+TLS (HTTP/2) and QUIC (HTTP/3) on one port of `address`."""
 
-    def __init__(self, address: str):
+    def __init__(self, address: str, quic_idle_timeout: float = None):
+        """``quic_idle_timeout`` (seconds) is the QUIC idle timeout of the server; None keeps aioquic's default (60 s)."""
         from aioquic.asyncio.protocol import QuicConnectionProtocol
         from aioquic.asyncio.server import QuicServer
         from aioquic.h3.connection import H3_ALPN, H3Connection
@@ -309,6 +315,8 @@ class H3Server:
                             self.transmit()
 
         configuration = QuicConfiguration(is_client=False, alpn_protocols=H3_ALPN)
+        if quic_idle_timeout is not None:
+            configuration.idle_timeout = quic_idle_timeout
         configuration.load_cert_chain(str(cert), str(key))
         self._loop = asyncio.new_event_loop()
         started = threading.Event()
