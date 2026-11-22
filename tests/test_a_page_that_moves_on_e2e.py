@@ -48,8 +48,12 @@ from __future__ import annotations
 
 import http.server
 import threading
+import time
+import types
 
 import pytest
+
+from _evidence_on_failure import FailureEvidence
 
 pytestmark = pytest.mark.e2e
 
@@ -63,6 +67,14 @@ def _landing(url: str) -> str:
 
 #: The address each page (by `id`) was last sent to, or the page it went with instead (`_goto`).
 _SENT: dict = {}
+
+#: What the client heard, for the evidence a failing test leaves (`FailureEvidence`; it only listens and changes no wait or assertion).
+_CLIENT_LOG: list = []
+
+
+def _note(what: str, **fields) -> None:
+    """One line of the client's own view of the module: what the test sent or heard, on the clocks of the evidence (`t` wall, `m` perf_counter)."""
+    _CLIENT_LOG.append({"t": round(time.time(), 4), "m": round(time.perf_counter(), 6), "what": what, **fields})
 
 
 def _goto(page, url, *, the_page_before_may_move, our_page_may_stop_ours, **kwargs) -> str:
@@ -82,11 +94,14 @@ def _goto(page, url, *, the_page_before_may_move, our_page_may_stop_ours, **kwar
 
     before = _SENT.get(id(page)) if the_page_before_may_move else None
     _SENT[id(page)] = url
+    _note("goto", url=url, before=before)
     try:
         page.goto(url, **kwargs)
+        _note("goto-answered", url=url)
         return url
     except Error as e:
         text = str(e)
+        _note("goto-raised", url=url, error=text[:300])
         if "NS_BINDING_ABORTED" in text:
             ends = tuple(_landing(u) for u in (before, url if our_page_may_stop_ours else None) if u)
             assert ends, e
@@ -160,12 +175,18 @@ for _name, _held in (("0", False), ("50", True)):
 HELD_DOCUMENTS = {"/hdr": _replace_while_the_document_is_held(False), "/hdx": _replace_while_the_document_is_held(True)}
 
 
+#: The test server's own record of every request it served, in the shape `FailureEvidence.watch_server` reads (`.state.lock`, `.state.records`).
+RECORD = types.SimpleNamespace(lock=threading.Lock(), records=[])
+
+
 @pytest.fixture(scope="module")
 def site():
     release = threading.Event()
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            with RECORD.lock:
+                RECORD.records.append({"t": round(time.time(), 4), "m": round(time.perf_counter(), 6), "method": "GET", "path": self.path})
             if self.path.split("?")[0] == "/hold":
                 # a response that has begun and does not end: 16 KiB so the first chunk is delivered at once,
                 # then it stays open until the page that asked for it moves away (or the module's teardown)
@@ -215,17 +236,60 @@ def site():
 
 
 @pytest.fixture(scope="module")
-def page(firefox_binary):
+def evidence():
+    """What a failing test of this module leaves for a reader (only on a failure; nothing is changed in what the tests wait for or assert):
+    the client's view of every request and navigation, the Juggler wire, the engine's own trace, the record of the test server.
+    Armed before the browser is launched (the engine reads its trace folder at launch) and held for the module."""
+    held = FailureEvidence("a-page-that-moves-on")
+    held.client_log = _CLIENT_LOG
+    held.watch_server(types.SimpleNamespace(state=RECORD))
+    held.arm()
+    try:
+        yield held
+    finally:
+        held.__exit__(None, None, None)
+
+
+class _on_failure:
+    """``with _on_failure(evidence):`` around the body of a test: when the body raises, the evidence held for the module is saved
+    (the folder the e2e jobs upload), and the exception goes on."""
+
+    def __init__(self, held):
+        self.held = held
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is not None:
+            self.held._save(exc_type, exc)
+        return False
+
+
+@pytest.fixture(scope="module")
+def page(firefox_binary, evidence):
     from invisible_playwright import InvisiblePlaywright
 
     with InvisiblePlaywright(seed=4321, binary_path=firefox_binary,
                              headless=True) as browser:
-        yield browser.new_page()
+        new = browser.new_page()
+        new.on("request", lambda r: _note("request", url=r.url, navigation=r.is_navigation_request()))
+        new.on("requestfinished", lambda r: _note("requestfinished", url=r.url))
+        new.on("requestfailed", lambda r: _note("requestfailed", url=r.url, failure=str(r.failure)))
+        new.on("framenavigated", lambda f: _note("framenavigated", url=f.url, main=f.parent_frame is None))
+        new.on("domcontentloaded", lambda p: _note("domcontentloaded", url=p.url))
+        new.on("load", lambda p: _note("load", url=p.url))
+        yield new
 
 
 @pytest.mark.parametrize("path", ["/head", "/r0", "/r50", "/r300",
                                   "/x0", "/x50", "/x300"])
-def test_a_read_right_after_goto_answers(page, site, path, engine_reaches):
+def test_a_read_right_after_goto_answers(page, site, path, engine_reaches, evidence):
+    with _on_failure(evidence):
+        _a_read_right_after_goto_answers(page, site, path, engine_reaches)
+
+
+def _a_read_right_after_goto_answers(page, site, path, engine_reaches):
     older = not engine_reaches("firefox-68")
     for i in range(ROUNDS):
         _goto(page, "%s%s?i=%s-%d" % (site, path, path[1:], i), the_page_before_may_move=True,
