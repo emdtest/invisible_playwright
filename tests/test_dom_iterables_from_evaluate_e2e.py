@@ -4,7 +4,7 @@ Upstream Playwright evaluates in the page's main world, so `[...x]` of any
 iterable works there. Our wrapper evaluates in the caller's world (Xrays), and
 on retail-like Windows `page.evaluate("async () => [...(await
 navigator.gpu.requestAdapter()).features]")` failed with "Xray wrapping of
-iterators not supported". This file measures how wide that difference is: one
+iterators not supported". This file holds the iterables that do work: one
 test per case, each spreading an iterable inside `evaluate` and returning plain
 values, so a case that fails names the iterable that does and the error text.
 
@@ -14,12 +14,11 @@ and a framework or a test harness does the same from `evaluate`, so a call that
 throws where stock Playwright answers is a product difference.
 
 Cases: URLSearchParams, FormData (empty and with a field), Headers, `document.fonts`,
-`querySelectorAll`, a Map created by the PAGE's own script, and the WebGPU
-`adapter.features` Set-like. WebGPU needs a secure context, so the page is served
-from 127.0.0.1; the engine is the declared one (the default launch) and the
-adapter must exist on both OSes: a missing adapter is a failure here, not a skip.
-
-This is a red proof while the difference exists: it is kept on its branch.
+`querySelectorAll`, and a Map created by the PAGE's own script: all green on firefox-68
+(run 44979351495, Linux and Windows), so this file characterizes them. The WebGPU
+`adapter.features` Set-like is NOT here: on firefox-68 spreading it from `evaluate` throws
+"Xray wrapping of iterators not supported" on both systems; its red proof is kept on the
+branch tests/dom-iterables-from-evaluate.
 """
 from __future__ import annotations
 
@@ -33,11 +32,6 @@ pytestmark = pytest.mark.e2e
 PAGE = b"""<!doctype html><html><head><meta charset="utf-8"><title>iterables</title></head>
 <body><p>one</p><p>two</p>
 <script>window.m = new Map([["x", 1]]);</script></body></html>"""
-
-
-def _is_non_empty_strings(value):
-    return (isinstance(value, list) and len(value) > 0
-            and all(isinstance(s, str) and s for s in value))
 
 
 # id -> (expression run by page.evaluate, check on its answer, what is expected)
@@ -63,14 +57,6 @@ CASES = {
     "a-map-made-by-the-page": (
         "() => [...window.m]",
         lambda v: v == [["x", 1]], '[["x", 1]]'),
-    "webgpu-adapter-features": (
-        """async () => {
-  if (!navigator.gpu) return {error: "navigator.gpu is missing"};
-  const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) return {error: "requestAdapter() answered null"};
-  return [...adapter.features];
-}""",
-        _is_non_empty_strings, "a non-empty array of strings"),
 }
 
 
