@@ -16,6 +16,15 @@ What the test does. A session (seed 42, no proxy; the road of the session is dec
 is opened and closed. The session ENDS (`_session_end.EndingPlaywright`: the reaper has finished, so the sender is finished or ended), then the test
 reads what the endpoint received.
 
+The grace is the product's own (invisible-core, `juggler/_profile.SENDER_GRACE`, 10 s), not one of the test. `Connection.close` returns when the browser
+has exited (the sender is left running: `process.outlives_the_browser`) and starts the launch's reaper, `process.Reaper(tree, grace=SENDER_GRACE)`; from
+there the reaper waits up to the grace for the tree to empty by itself, then ends what is left (the process group: SIGTERM, SIGKILL 5 s later; on
+Windows the launch's job) and removes the session's profile. A sender still running at the end of the grace is killed and its ping is lost with the
+profile: a user's close does the same. The sender is started by the browser during its own shutdown, so the grace counts what is left of its run
+after the browser has gone (measured by the core: 0.6 s on Linux, 1.0 s on Windows). So the ping is asserted where the product puts it: on the
+endpoint when the session has ended, with no wait of the test after it. The endpoint records a request before it answers, and the sender ends only
+after the answer, so a ping that the sender delivered is on the record by then.
+
 What it asserts:
 * at least one request reached the endpoint with `User-Agent: pingsender/2.0`, a POST to a path of the telemetry protocol (`/submit/telemetry/...`),
   with a body;
@@ -33,29 +42,13 @@ import threading
 
 import pytest
 
-import _session_end
 from _session_end import EndingPlaywright
-from _waits import wait_until
-from invisible_core.juggler import _profile
 
 pytestmark = pytest.mark.e2e
 
 SERVER = "toolkit.telemetry.server"
 UPLOAD = "datareporting.healthreport.uploadEnabled"
 BACKGROUND_TASK_AGENT = "pingsender/2.0"
-
-#: What the sender is given to end by itself: far beyond a cold start on a loaded runner (the core's own is `_profile.SENDER_GRACE`, 10 s,
-#: and the reaper ends the sender once it is over, so a slow sender would lose its ping and the verdict would judge the machine).
-SENDER_GRACE = 120.0
-
-
-@pytest.fixture(autouse=True)
-def the_sender_ends_by_itself(monkeypatch):
-    """The verdict waits for the sender to end by itself. `_profile.SENDER_GRACE` is read at the call (`Connection.close` and
-    `SessionFiles.remove` name it through the module), so the patch takes effect; the wait ends when the sender does, never on the time. The
-    session's own safety net (`ensure_ended`) goes up with it, since it would otherwise end the wait at 30 s."""
-    monkeypatch.setattr(_profile, "SENDER_GRACE", SENDER_GRACE)
-    monkeypatch.setitem(_session_end.ensure_ended.__kwdefaults__, "timeout", SENDER_GRACE + 30.0)
 
 
 class Endpoint:
@@ -107,15 +100,15 @@ def session(binary, endpoint, extra_prefs=None):
 
 def test_the_shutdown_ping_is_sent_by_the_background_task_and_not_by_the_host_program(firefox_binary):
     endpoint, elsewhere = Endpoint(), Endpoint()
-    stop = threading.Event()
     try:
         session(firefox_binary, endpoint)
-        # The session has ended; the request of the sender is on the endpoint, or it comes within the time a healthy run allows.
-        arrived = wait_until(lambda: endpoint.by_agent(BACKGROUND_TASK_AGENT), 60, lambda: stop.wait(0.25))
-        seen = [(r["method"], r["path"][:60], r["agent"], r["bytes"]) for r in endpoint.requests]
-        assert arrived, ("no request with `User-Agent: %s` reached the endpoint after the session ended; what it received: %s"
-                         % (BACKGROUND_TASK_AGENT, seen))
+        # The session has ended: the sender has finished within the product's grace, or the reaper killed it and its ping is lost. Nothing is
+        # waited for after this point.
         pings = endpoint.by_agent(BACKGROUND_TASK_AGENT)
+        seen = [(r["method"], r["path"][:60], r["agent"], r["bytes"]) for r in endpoint.requests]
+        assert pings, ("no request with `User-Agent: %s` had reached the endpoint when the session ended: the background task did not deliver "
+                       "the shutdown ping within the core's grace (`SENDER_GRACE`, after which the reaper kills it); what the endpoint received: %s"
+                       % (BACKGROUND_TASK_AGENT, seen))
         assert all(r["method"] == "POST" and r["path"].startswith("/submit/telemetry/") and r["bytes"] > 0 for r in pings), pings
         assert elsewhere.requests == [], "an endpoint the session was not pointed at received %s" % (elsewhere.requests,)
 
