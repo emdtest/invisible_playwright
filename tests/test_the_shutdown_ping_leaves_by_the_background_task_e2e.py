@@ -33,14 +33,29 @@ import threading
 
 import pytest
 
+import _session_end
 from _session_end import EndingPlaywright
 from _waits import wait_until
+from invisible_core.juggler import _profile
 
 pytestmark = pytest.mark.e2e
 
 SERVER = "toolkit.telemetry.server"
 UPLOAD = "datareporting.healthreport.uploadEnabled"
 BACKGROUND_TASK_AGENT = "pingsender/2.0"
+
+#: What the sender is given to end by itself: far beyond a cold start on a loaded runner (the core's own is `_profile.SENDER_GRACE`, 10 s,
+#: and the reaper ends the sender once it is over, so a slow sender would lose its ping and the verdict would judge the machine).
+SENDER_GRACE = 120.0
+
+
+@pytest.fixture(autouse=True)
+def the_sender_ends_by_itself(monkeypatch):
+    """The verdict waits for the sender to end by itself. `_profile.SENDER_GRACE` is read at the call (`Connection.close` and
+    `SessionFiles.remove` name it through the module), so the patch takes effect; the wait ends when the sender does, never on the time. The
+    session's own safety net (`ensure_ended`) goes up with it, since it would otherwise end the wait at 30 s."""
+    monkeypatch.setattr(_profile, "SENDER_GRACE", SENDER_GRACE)
+    monkeypatch.setitem(_session_end.ensure_ended.__kwdefaults__, "timeout", SENDER_GRACE + 30.0)
 
 
 class Endpoint:
