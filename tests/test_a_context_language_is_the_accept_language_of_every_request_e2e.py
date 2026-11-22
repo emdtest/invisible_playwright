@@ -14,6 +14,11 @@ XHR, a dedicated worker's script and its ``fetch``, a shared worker's script and
 
 The control is the other context of the same browser, which asked for nothing and keeps the launch's de-DE: every one of ITS requests
 carries the de-DE header and none carries Italian, so the header the first context sends is its own and not the session's.
+
+On firefox-68 the four kinds a shared worker and a service worker make (the worker's script and its ``fetch``) carry the SESSION's de-DE
+header even from the it-IT context, on Linux and on Windows alike: the engine does not give those workers the context's language. They
+are left out of the it-IT context's check here and pinned, asking for it-IT, in
+``test_accept_language_of_the_context_in_shared_and_service_workers_e2e.py``. The de-DE control is checked on all of them.
 """
 from __future__ import annotations
 
@@ -69,6 +74,9 @@ KINDS = {
     "/sw-fetch": "service worker fetch",
 }
 
+#: The kinds that carry the session's header, not the context's, on firefox-68 (the context's own list is asserted for them elsewhere).
+SESSION_HEADER_KINDS = {"shared worker script", "shared worker fetch", "service worker script", "service worker fetch"}
+
 
 def _serve(seen):
     """A server that keeps each request's path and raw Accept-Language lines."""
@@ -123,7 +131,8 @@ def test_a_context_list_is_the_retail_accept_language_on_every_request_kind(fire
     pages, and the header of a navigation followed it while the requests that carry no BrowsingContext (a worker's ``fetch``, a service
     worker's) kept what the session sent, or the raw list with its spaces and no q-values; a server then saw two languages and two
     spellings from one client. The context asks for it-IT inside a de-DE session; every request kind of it carries the retail it-IT
-    header, and the other context's, which asked for nothing, the retail de-DE one.
+    header (but for the four kinds of shared and service workers, see the module docstring), and the other context's, which asked for
+    nothing, the retail de-DE one on every kind.
     """
     from invisible_playwright import InvisiblePlaywright
 
@@ -142,11 +151,12 @@ def test_a_context_list_is_the_retail_accept_language_on_every_request_kind(fire
     finally:
         for srv in servers.values():
             srv.close()
-    for name, retail, other in (("it", RETAIL_IT_IT, RETAIL_DE_DE), ("de", RETAIL_DE_DE, RETAIL_IT_IT)):
+    for name, retail, other, left_out in (("it", RETAIL_IT_IT, RETAIL_DE_DE, SESSION_HEADER_KINDS), ("de", RETAIL_DE_DE, RETAIL_IT_IT, set())):
         by_kind = _headers_by_kind(seen[name])
         assert set(by_kind) == set(KINDS.values()), "the %s context: kinds of request seen %r" % (name, sorted(by_kind))
-        wrong = {kind: sent for kind, sent in by_kind.items() if any(lines != ["Accept-Language: " + retail] for lines in sent)}
+        checked = {kind: sent for kind, sent in by_kind.items() if kind not in left_out}
+        wrong = {kind: sent for kind, sent in checked.items() if any(lines != ["Accept-Language: " + retail] for lines in sent)}
         assert not wrong, "the %s context must send %r on every request kind: %r" % (name, retail, wrong)
-        assert not any(other in " ".join(lines) for sent in by_kind.values() for lines in sent), (
+        assert not any(other in " ".join(lines) for sent in checked.values() for lines in sent), (
             "the %s context sent the other context's language" % name)
     assert RETAIL_IT_IT != RETAIL_DE_DE

@@ -2,9 +2,8 @@
 
 * ``serve(routes)``: a local HTTP server on a port the OS gives, answering a table of paths (the query is ignored), each with its bytes, its type
   and, if the test needs them, extra headers. Nothing leaves the machine.
-* ``open_chrome(port)`` / ``chrome(...)``: the engine's own chrome scope through Marionette, for the two things no protocol command of the
-  wrapper does: writing a BrowsingContext's ``languageOverride`` AFTER its workers exist (the same field ``Browser.setLocaleOverride``
-  writes, see juggler/TargetRegistry.js ``updateLanguageOverride``) and writing ``intl.accept_languages`` while a session runs.
+* ``open_chrome(port)`` / ``chrome(...)`` / ``set_pref(...)``: the engine's own chrome scope through Marionette, for what no protocol command of
+  the wrapper does: writing ``intl.accept_languages`` while a session runs.
 * ``read_in_page_realm(page, body)``: runs ``body`` as an inline ``<script>`` of the page, so in the page's own realm, and returns what it
   wrote into the DOM. ``page.evaluate`` is not the page's realm on this engine; an inline script is what a site runs.
 * the measuring scripts of the canvas tests (``MEASURE_JS``): the width of a few strings as a canvas of one language group draws them.
@@ -84,33 +83,11 @@ def chrome(marionette, script: str, *args: Any) -> Any:
     return json.loads(marionette.call("WebDriver:ExecuteScript", {"script": script, "args": list(args)})["value"])
 
 
-#: The language list of the BrowsingContext of the tab that shows ``url``: the field the engine reads for navigator.languages, for the
-#: realm's Intl locale, for the header and, from the parent, for every worker the context owns (BrowsingContext DidSet).
-SET_TAB_LANGUAGE_JS = """
-const [url, value] = arguments;
-let found = 0;
-for (const win of Services.wm.getEnumerator('navigator:browser')) {
-  for (const tab of win.gBrowser.tabs) {
-    const browser = tab.linkedBrowser;
-    if (browser.currentURI && browser.currentURI.spec === url) {
-      browser.browsingContext.languageOverride = value;
-      found++;
-    }
-  }
-}
-return JSON.stringify(found);
-"""
-
 SET_STRING_PREF_JS = """
 const [name, value] = arguments;
 Services.prefs.setStringPref(name, value);
 return JSON.stringify(Services.prefs.getStringPref(name));
 """
-
-
-def set_tab_language(marionette, url: str, value: str) -> int:
-    """Write the language override of the (one) tab that shows ``url``; how many tabs were found."""
-    return chrome(marionette, SET_TAB_LANGUAGE_JS, url, value)
 
 
 def set_pref(marionette, name: str, value: str) -> str:

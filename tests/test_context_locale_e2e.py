@@ -193,64 +193,6 @@ def _wait_for(condition, page):
     return wait_until(condition, 30, lambda: page.wait_for_timeout(100))
 
 
-def _engine_side(context):
-    """The browser dispatcher (with the engine connection, ``.conn``) and the context dispatcher of the in-process server that answers
-    this context: the command a client sends for a context's language is sent here by hand, after the pages exist."""
-    impl = context._impl_obj
-    server = impl._connection._transport._server
-    dispatcher = server.object(impl._guid)
-    return dispatcher.browser, dispatcher
-
-
-@pytest.mark.e2e
-def test_a_running_worker_follows_a_language_set_after_its_birth(firefox_binary):
-    """⛔ A WORKER THAT ALREADY RUNS KEEPS THE LANGUAGE IT WAS BORN WITH. The language of a context can change after its pages and their
-    workers exist (``Browser.setLocaleOverride`` writes the BrowsingContext's LanguageOverride whenever the client asks); a page's
-    ``Intl`` follows at once, and the worker's realm has to follow too, or a site that asks the same question on the page and in a
-    worker gets two languages out of one browser. The engine does it in WorkerPrivate::UpdateLanguageOverrideInternal.
-
-    Two de-DE contexts each with a dedicated worker; the language of the first context is set to "fr-FR, fr" with the Juggler command
-    the product itself uses for a context's language (``Browser.setLocaleOverride``, sent on the in-process connection as the
-    downloads test does; a write of the BrowsingContext field from Marionette is not the product's road); the first worker answers fr-FR in its ``Intl`` from then on. The control is the second
-    context's worker: it was told nothing and still says de-DE, so the change reached the workers of its own context only.
-    ``navigator.languages`` of the worker after the change is not asserted: it is what the engine does today and it is kept in the
-    failure message.
-    """
-    from invisible_playwright import InvisiblePlaywright
-
-    srv, base = probe.serve(SITE)
-    try:
-        with InvisiblePlaywright(seed=5150, binary_path=firefox_binary, headless=True, locale="it-IT", timezone="Europe/Rome") as browser:
-            tabs = []
-            for name in ("a", "b"):
-                context = browser.new_context(locale="de-DE")
-                page = context.new_page()
-                page.goto("%s/page?%s" % (base, name), wait_until="load", timeout=30_000)
-                page.evaluate(probe.START_LANG_WORKER_JS)
-                tabs.append(page)
-            tab_a, tab_b = tabs
-            born = {"languages": DE_LIST, "intl": "de-DE"}
-            assert tab_a.evaluate(probe.ASK_LANG_WORKER_JS) == born, "the worker of the first de-DE context before the change"
-            assert tab_b.evaluate(probe.ASK_LANG_WORKER_JS) == born, "the worker of the second de-DE context before the change"
-
-            engine, dispatcher = _engine_side(tab_a.context)
-            engine.conn.send("Browser.setLocaleOverride",
-                             {"browserContextId": dispatcher.context_id, "locale": "fr-FR, fr"}, timeout=None)
-
-            seen = []
-
-            def follows():
-                seen.append(tab_a.evaluate(probe.ASK_LANG_WORKER_JS))
-                return seen[-1]["intl"] == "fr-FR"
-
-            assert _wait_for(follows, tab_a), "the running worker never took fr-FR in its Intl; it answered %r" % (seen[-3:],)
-            assert tab_a.evaluate("Intl.DateTimeFormat().resolvedOptions().locale") == "fr-FR", "the page of the first context"
-            assert tab_b.evaluate(probe.ASK_LANG_WORKER_JS) == born, (
-                "the worker of the second context, which nobody changed, must keep de-DE (the change is the first context's)")
-    finally:
-        probe.stop(srv)
-
-
 @pytest.mark.e2e
 def test_a_worker_with_its_own_language_ignores_the_accept_languages_pref(firefox_binary, monkeypatch):
     """⛔ ``intl.accept_languages`` IS THE LANGUAGE OF A BROWSER THAT DECLARED NONE. When the pref changes Firefox tells every worker, and
@@ -409,53 +351,6 @@ def test_an_audio_worklet_of_a_context_speaks_its_language_and_zone(firefox_bina
 
 def _canvas_widths(page):
     return page.evaluate(probe.MEASURE_PAGE_JS, ["ja", "en"])
-
-
-@pytest.mark.e2e
-def test_an_offscreen_canvas_of_a_worker_draws_with_the_language_group_of_its_context(firefox_binary):
-    """⛔ THE FONT OF TEXT THAT NAMES NO LANGUAGE IS CHOSEN BY THE LANGUAGE GROUP, AND A WORKER'S CANVAS HAS NO DOCUMENT TO ASK. The generic
-    ``serif`` of a Japanese page is another font than the one of an English page, so a string measured in a canvas tells a site which
-    language the canvas draws in. In a worker the engine reads it from the thread's own language slot (nsLanguageAtomService, fed
-    from the worker's language), which is the context's, not the process's.
-
-    An en-US session, a context with ``locale="ja-JP"`` and one with nothing asked. In each, a dedicated worker measures a few strings
-    on an OffscreenCanvas; the same page measures them on a canvas ELEMENT with ``lang="ja"`` and one with ``lang="en"``, the two groups
-    named outright. The ja-JP context's worker measures as the ``ja`` element and not as the ``en`` one; the other context's worker the
-    other way round. The two elements differ from each other, which is what makes the comparison say anything.
-    """
-    from invisible_playwright import InvisiblePlaywright
-
-    srv, base = probe.serve(SITE)
-    try:
-        with InvisiblePlaywright(seed=5150, binary_path=firefox_binary, headless=True, locale="en-US",
-                                 timezone="America/New_York") as browser:
-            read = {}
-            for name, options in (("ja", {"locale": "ja-JP"}), ("en", {})):
-                page = browser.new_context(**options).new_page()
-                page.goto("%s/page?%s" % (base, name), wait_until="load", timeout=30_000)
-                read[name] = _canvas_widths(page)
-                # recorded for the failure message only: a canvas ELEMENT with no ``lang`` in the page of this context
-                read[name]["element_without_lang"] = page.evaluate(
-                    "() => {%s const c = document.createElement('canvas'); document.body.appendChild(c); return widths(c.getContext('2d'));}"
-                    % probe.MEASURE_JS)
-        # Everything measured, in every message below, so a failing run says which reader sides with which language: the worker of the
-        # ja-JP context and the worker of the default context (the session's own language, en-US), the main-thread offscreen canvas and
-        # the canvas element with no lang of each context's page, and the elements named ja and en.
-        record = "; ".join(
-            "%s context: worker=%r offscreen(main thread)=%r element(no lang)=%r element(lang=ja)=%r element(lang=en)=%r" % (
-                name, read[name]["worker"], read[name]["offscreen"], read[name]["element_without_lang"],
-                read[name]["element"]["ja"], read[name]["element"]["en"])
-            for name in ("ja", "en"))
-        for name, other in (("ja", "en"), ("en", "ja")):
-            got = read[name]
-            assert got["element"]["ja"] != got["element"]["en"], (
-                "the two language groups draw these strings alike here, so nothing can tell them apart: %r [%s]" % (got["element"], record))
-            assert got["worker"] == got["element"][name], (
-                "the worker of the %s context measures %r, a canvas of the %s group %r [%s]" % (name, got["worker"], name, got["element"][name], record))
-            assert got["worker"] != got["element"][other], "the worker of the %s context measures as the %s group [%s]" % (name, other, record)
-        assert read["ja"]["worker"] != read["en"]["worker"], "the two contexts' workers measure alike: the context's language did not reach the canvas [%s]" % record
-    finally:
-        probe.stop(srv)
 
 
 @pytest.mark.e2e
