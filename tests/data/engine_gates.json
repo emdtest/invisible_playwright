@@ -14,10 +14,12 @@
   },
   "firefox-69": {
     "carries": [
-      "generate mode of the security state does not start Glean at shutdown (telemetry.fog.init_on_shutdown is false)"
+      "generate mode of the security state does not start Glean at shutdown (telemetry.fog.init_on_shutdown is false)",
+      "the engine tells the client when the parent moves a navigation to another process (onNavigationMoved, with the BrowsingContext and the child id of the process left)"
     ],
     "files": {
-      "tests/test_security_state_engine_e2e.py": "generate mode does not start Glean at shutdown"
+      "tests/test_security_state_engine_e2e.py": "generate mode does not start Glean at shutdown",
+      "tests/test_a_navigation_that_moved_is_told_by_the_engine_e2e.py": "the engine tells the client when the parent moves a navigation to another process (onNavigationMoved, with the BrowsingContext and child id of the process left); on an older engine the trace holds no such line"
     }
   }
 }
