@@ -13,7 +13,9 @@ What this fixes in place (characterisation of the published engine firefox-68; t
 * An IPv4-mapped literal (`::ffff:127.0.0.1`) is refused on every system and whatever the declaration says: Windows refuses `connect()` to a mapped
   address on a socket that is IPv6-only (Firefox's are), and a dual-stack Linux socket would connect over IPv4. The listener below never sees it.
 * A destination behind a SOCKS proxy is never judged: the proxy reaches it, not this host. The same literal that is refused with no proxy reaches the
-  proxy as ONE CONNECT whose destination is that address and port.
+  proxy as a CONNECT whose destination is that address and port, as an IPv6 address (SOCKS5 address type 4), never as a name. How many times the
+  browser tries it (Mozilla retries a connection that did not answer at once) is Mozilla's code and is not fixed here: every CONNECT of the
+  navigation to the documentation destination has that shape, and there is at least one.
 
 Not clocks: "refused by the engine" and "timed out" are told apart by the error (`TypeError` with the failure text `NS_ERROR_CONNECTION_REFUSED`, against a
 `TimeoutError` of the 30 s deadline of the fetch), and by the listener having heard nothing; no duration is read anywhere.
@@ -23,23 +25,34 @@ Negative controls, in the same test:
 * the listener is real: the same address by its IPv4 literal (`127.0.0.1`) reaches it, once, in the launches where the mapped literal does not;
 * the mapped literal is refused with IPv6 declared on as well as off (a rule of its own: the declaration decides the other literals, not this one);
 * behind the proxy the documentation-prefix literal that is refused direct IS carried: an engine that judged it behind SOCKS (or that always passed
-  `kDirect`) would make the proxy record no CONNECT, and the fetch would fail.
+  `kDirect`) would make the proxy record no CONNECT, and the fetch would fail; and an engine that handed the proxy the literal in another shape (a
+  name, an IPv4 address) fails the shape assertion.
 
 What this test cannot tell, by design: with IPv6 declared on, a global IPv6 literal goes to the OS, whose answer depends on the machine (a runner with no
 IPv6 route answers `ENETUNREACH`, the same `NS_ERROR_CONNECTION_REFUSED` as the engine's), so the documentation-prefix fetch is judged only in the
 declared-off launch and behind the proxy. The port is 80: Firefox bans port 9 (discard) before any connect, so a fetch to it never reaches the gate.
 
-Hermetic: a local listener, a local SOCKS5 gateway of `tests/_socks_servers.py` that maps the documentation address to the listener; no external network.
+Hermetic: a local listener, a local SOCKS5 gateway of `tests/_socks_servers.py` that maps the documentation address to the listener and forwards
+NOTHING else: the browser's own background traffic also arrives at the gateway, and every CONNECT to an address that is not the lab's is refused
+(reply 5) and recorded. Every request, refused or carried, is recorded with its time since the launch, its SOCKS5 address type, its destination as received and
+its port. The refused list is written, always, under `$RUNNER_TEMP/invpw-evidence/` (the folder the e2e jobs upload), so that a reader sees
+what the browser asked for besides the literal.
 """
 from __future__ import annotations
 
+import json
+import os
+import pathlib
+import socket
 import socketserver
+import struct
 import threading
+import time
 
 import pytest
 
 from _servers import LocalServer
-from _socks_servers import EXIT, Gateway
+from _socks_servers import EXIT, Gateway, _recv_exact
 from _udp_line import egress_by_proxy, measure_servers
 from _waits import wait_until
 from test_declared_host_network_e2e import DUAL, NETWORK_ENV, V4_ONLY
@@ -51,6 +64,10 @@ DOCUMENTATION = "2001:db8::1"
 DOCUMENTATION_HTTP = 80
 #: What a failed connect of the engine is called by the browser (NSPR's PR_NETWORK_UNREACHABLE_ERROR and PR_ADDRESS_NOT_AVAILABLE_ERROR both end here).
 REFUSED = "NS_ERROR_CONNECTION_REFUSED"
+#: SOCKS5 address type of an IPv6 address (RFC 1928); 1 is IPv4, 3 a domain name.
+ATYP_IPV6 = 4
+#: The folder under ``$RUNNER_TEMP`` the e2e workflows upload (``invpw-evidence-*``).
+EVIDENCE_FOLDER = "invpw-evidence"
 #: The deadline of a fetch that must END (refused, or carried): far beyond a healthy run; what the page reads on a timeout is a `TimeoutError`, never a verdict.
 FETCH_SECONDS = 30
 
@@ -94,15 +111,74 @@ class _Listener:
 
 
 class _GatewayToALocalListener(Gateway):
-    """The SOCKS5 gateway of the tests (TCP relayed for real, UDP refused) that carries the documentation address to a local listener: the destination it
-    is asked for is what it records in ``connects``, and what the listener hears is what it carried."""
+    """The SOCKS5 gateway of the tests (UDP refused) that carries the documentation address to a local listener and forwards nothing else: the destination
+    it is asked for is what it records in ``connects`` (with its SOCKS5 address type in ``addresses``), what the listener hears is what it carried, and
+    every CONNECT to an address that is not the lab's is refused and recorded in ``refused``."""
 
     def __init__(self, carried: dict) -> None:
         self._carried = dict(carried)
+        #: Every address of a request the gateway read, as (host, port, address type), in order.
+        self.addresses: list = []
+        #: Every CONNECT that was not the lab's and was refused (reply 5, connection refused), as (host, port), in order.
+        self.refused: list = []
+        #: Every request, as a dict, for the evidence file: ``t`` (seconds, monotonic, since ``launch_started``), ``atyp`` (SOCKS5 address type: 1 IPv4,
+        #: 3 domain name, 4 IPv6), ``destination`` (as received: the NAME when the type is 3), ``port``, ``outcome``.
+        self.records: list = []
+        self._launch_t0 = time.monotonic()
+        self._current = threading.local()
         super().__init__(udp="refuse", tcp_exit=EXIT, udp_exit=EXIT)
+
+    @staticmethod
+    def _address_of(c: socket.socket):
+        atyp = _recv_exact(c, 1)[0]
+        if atyp == 1:
+            host = socket.inet_ntoa(_recv_exact(c, 4))
+        elif atyp == 3:
+            host = _recv_exact(c, _recv_exact(c, 1)[0]).decode()
+        else:
+            host = socket.inet_ntop(socket.AF_INET6, _recv_exact(c, 16))
+        return host, struct.unpack("!H", _recv_exact(c, 2))[0], atyp
+
+    def launch_started(self) -> None:
+        """Call just before the launch of the browser behind this gateway: the origin of the times of ``records``."""
+        self._launch_t0 = time.monotonic()
+
+    def _read_address(self, c: socket.socket):
+        host, port, atyp = self._address_of(c)
+        self.addresses.append((host, port, atyp))
+        record = {"t": round(time.monotonic() - self._launch_t0, 3), "atyp": atyp, "destination": host, "port": port,
+                  "outcome": "answered by the lab (or not a CONNECT)"}
+        self.records.append(record)
+        self._current.record = record
+        return host, port
 
     def _target(self, host: str, port: int):
         return self._carried.get((host, port), (host, port))
+
+    def _open_upstream(self, target):
+        if target not in self._carried.values():
+            self.refused.append(target)
+            self._current.record["outcome"] = "refused"
+            raise OSError("the lab forwards nothing outside the lab: %s:%d" % target)
+        self._current.record["outcome"] = "carried to the listener of the lab"
+        return super()._open_upstream(target)
+
+    def documentation_connects(self) -> list:
+        """Every request of the navigation to the documentation destination, in whatever shape it arrived: the host is told by its digits."""
+        return [(host, port, atyp) for host, port, atyp in self.addresses if "2001:db8" in host.lower()]
+
+
+def _write_refused(gateway: "_GatewayToALocalListener") -> None:
+    """What the gateway refused, always (a few lines): under ``$RUNNER_TEMP/invpw-evidence/`` the e2e jobs upload. Off a runner nothing is written."""
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if not runner_temp:
+        return
+    folder = pathlib.Path(runner_temp) / EVIDENCE_FOLDER / "ipv6-literal-refused-connects" / ("%d-%d" % (os.getpid(), int(time.time() * 1000)))
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "refused-connects.json").write_text(json.dumps({
+        "refused": ["%s:%d" % target for target in gateway.refused],
+        "requests": gateway.records,
+    }, indent=2), encoding="utf-8")
 
 
 def _launch(firefox_binary, gateway=None):
@@ -160,13 +236,15 @@ def test_a_direct_ipv6_literal_is_refused_and_one_behind_socks_is_left_to_the_pr
         try:
             monkeypatch.setattr(_geo, "discover_egress_ip", egress_by_proxy(gateway))
             monkeypatch.setenv(NETWORK_ENV, V4_ONLY)
+            gateway.launch_started()
             with _launch(firefox_binary, gateway) as browser:
                 page, failures = _page_of(browser)
                 proxied = _try(page, failures, "http://[%s]:%d/" % (DOCUMENTATION, DOCUMENTATION_HTTP), "[%s]" % DOCUMENTATION)
                 wait_until(lambda: behind.connections, FETCH_SECONDS, lambda: page.wait_for_timeout(50))
-            carried = [c for c in gateway.connects if c[0] == DOCUMENTATION]
+            documentation = gateway.documentation_connects()
         finally:
             gateway.close()
+            _write_refused(gateway)
 
     # The listener is real: its IPv4 literal reaches it, once per launch.
     for name, seen in (("declared off", off), ("declared on", on)):
@@ -188,10 +266,14 @@ def test_a_direct_ipv6_literal_is_refused_and_one_behind_socks_is_left_to_the_pr
         "declared off: the direct fetch of %s did not fail as a refused connection (a TimeoutError means a connect was attempted): %s" % (DOCUMENTATION, off))
     assert failed == [REFUSED], "declared off: the client reported %r for the direct documentation-prefix literal: %s" % (failed, off)
 
-    # The same literal behind the SOCKS5 gateway is carried: one CONNECT with that destination, and the listener behind it answered.
+    # The same literal behind the SOCKS5 gateway is carried: every CONNECT of the navigation to the documentation destination is the IPv6 literal and port,
+    # as an IPv6 address (how many the browser makes is Mozilla's), and the listener behind it answered.
     assert proxied[0] == {"ok": True, "type": "opaque"}, (
-        "the fetch of %s behind the SOCKS5 gateway was not carried (it is refused with no proxy): %s; failures %s; gateway connects %s" % (
-            DOCUMENTATION, proxied[0], proxied[1], gateway.connects))
-    assert carried == [(DOCUMENTATION, DOCUMENTATION_HTTP)], "the gateway should have been asked for one CONNECT to %s:%d: %s" % (
-        DOCUMENTATION, DOCUMENTATION_HTTP, gateway.connects)
-    assert len(behind.connections) == 1, "the listener behind the gateway heard %d connections" % len(behind.connections)
+        "the fetch of %s behind the SOCKS5 gateway was not carried (it is refused with no proxy): %s; failures %s; gateway requests %s" % (
+            DOCUMENTATION, proxied[0], proxied[1], gateway.addresses))
+    assert documentation, "the gateway was asked for no CONNECT to %s:%d: %s" % (DOCUMENTATION, DOCUMENTATION_HTTP, gateway.addresses)
+    assert set(documentation) == {(DOCUMENTATION, DOCUMENTATION_HTTP, ATYP_IPV6)}, (
+        "every CONNECT to the documentation destination should carry the IPv6 literal %s port %d as an IPv6 address (type %d): %s" % (
+            DOCUMENTATION, DOCUMENTATION_HTTP, ATYP_IPV6, documentation))
+    assert (DOCUMENTATION, DOCUMENTATION_HTTP) not in gateway.refused, "the gateway refused the destination of the lab: %s" % gateway.refused
+    assert len(behind.connections) >= 1, "the listener behind the gateway heard nothing"
