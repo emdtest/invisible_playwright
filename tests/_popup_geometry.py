@@ -74,8 +74,9 @@ def _plausible(reading: Dict[str, Any]) -> bool:
 
 
 def read_popup(binary: str, extra_prefs: Optional[Dict[str, Any]] = None, iframe: bool = False,
-               ready: Optional[Callable[[Dict[str, Any]], bool]] = None) -> Dict[str, Any]:
-    """Open `window.open(url, 'p', 'width=500,height=400')` from a click and read it.
+               ready: Optional[Callable[[Dict[str, Any]], bool]] = None,
+               features: str = "width=500,height=400") -> Dict[str, Any]:
+    """Open `window.open(url, 'p', features)` (default `width=500,height=400`) from a click and read it.
 
     Returns `{"popup": {...}, "frame": {...} or None}` with `iw ih ow oh sx sy mx my` (innerWidth, innerHeight,
     outerWidth, outerHeight, screenX, screenY, mozInnerScreenX, mozInnerScreenY) of the popup and, with `iframe`, of its
@@ -85,7 +86,7 @@ def read_popup(binary: str, extra_prefs: Optional[Dict[str, Any]] = None, iframe
 
     with Sites() as s:
         s.route("A", "/main", "<!doctype html><title>main</title><button id='open' onclick=\"window.open('%s', 'p', "
-                "'width=500,height=400')\">open</button>" % s.url("A", "/popup"))
+                "'%s')\">open</button>" % (s.url("A", "/popup"), features))
         frame_html = ("<iframe id='f' src='%s' style='position:absolute;left:0;top:0;width:200px;height:150px;border:0'>"
                       "</iframe>" % s.url("B", "/frame")) if iframe else ""
         s.route("A", "/popup", "<!doctype html><title>popup</title>" + frame_html)
