@@ -13,7 +13,7 @@ What the test does. A NEW profile directory, a session on it. It waits on the CO
 condition "the parent reports a non-zero `memmapped-written-cache`" (the file appears when the write is moved into place and is adopted a moment after).
 It asserts, for that session: `memmapped-written-cache` equals the size of the file (non-zero), and `heap/saved-scripts` is below the size of the file (the
 heap copies are gone: without the hook it is about the size of the file). Then the SAME profile is opened again (warm): `memmapped-cache` equals the size of
-the file the session started with (the file is mapped under the name `scriptCache-current.bin`: a warm session moves `scriptCache.bin` aside when it opens it), and
+the file left on disk when the fresh session ended (it can be a rewrite of the shutdown, smaller than the adopted one) (the file is mapped under the name `scriptCache-current.bin`: a warm session moves `scriptCache.bin` aside when it opens it), and
 `memmapped-written-cache` is 0 unless the session wrote the cache again, in which case `scriptCache.bin` is back and it equals the new size.
 
 Negative control: the warm session of the same profile. The fresh and the warm session differ in the two reporters in the way described (written is the size
@@ -109,7 +109,11 @@ def test_a_fresh_profile_reports_its_written_cache_as_mapped(firefox_binary, mon
     assert fresh.get(READ_CACHE, 0) == 0, "a fresh profile has no cache to read: %r" % (fresh,)
 
     # Control: the same profile, warm. The cache of the file is read as a mapping and nothing written this session is reported unless it was rewritten.
-    started_with = size
+    # The warm session maps the file that is on disk when the fresh session is OVER, not the one that was adopted while it ran: the cache can be written
+    # again during the shutdown (`ScriptPreloader::InvalidateCache` starts a new write when the cache is invalidated after it was saved, and the file is
+    # replaced), so the size to compare with is read here, after the exit.
+    started_with = cache.stat().st_size if cache.exists() else 0
+    assert started_with > 0, "the fresh session left no script cache for the warm session to open: %s" % cache
     port = webfont_probe.marionette_port()
     marionette = None
     try:
@@ -126,6 +130,6 @@ def test_a_fresh_profile_reports_its_written_cache_as_mapped(firefox_binary, mon
     finally:
         if marionette is not None:
             marionette.close()
-    assert warm.get(READ_CACHE, 0) == started_with, "the warm session did not map the cache it found (%d bytes): %r" % (started_with, warm)
+    assert warm.get(READ_CACHE, 0) == started_with, "the warm session did not map the cache it found (%d bytes on disk when the fresh session ended, %d adopted while it ran): %r" % (started_with, size, warm)
     assert warm.get(WRITTEN, 0) in (0, now), "the warm session reports a written cache that is not its file: %r (file %d bytes)" % (warm, now)
     assert warm.get(READ_CACHE, 0) != fresh.get(READ_CACHE, 0)
