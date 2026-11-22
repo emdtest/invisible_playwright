@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from _window_sessions import launch, wait_for_condition
+from _window_sessions import in_a_thread_of_its_own, launch, wait_for_condition
 
 pytestmark = pytest.mark.e2e
 
@@ -36,6 +36,13 @@ EVENTS = "() => window.__events"
 TWO_FRAMES = "() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))"
 
 
+def takes_the_focus(b):
+    """Runs in the second session's own thread: opens a window and waits until its page has the focus."""
+    taker = b.new_page()
+    taker.goto("about:blank")
+    wait_for_condition(taker, lambda: taker.evaluate(HAS_FOCUS), lambda focused: focused is True, "the second session's page never took the focus")
+
+
 def another_session_takes_the_display(firefox_binary, keeps, with_own_page=False):
     """What A's page reads once B's window has the focus, and (``with_own_page``) once A has opened a page of its own."""
     extra = None if keeps else {PREF: False}
@@ -44,10 +51,8 @@ def another_session_takes_the_display(firefox_binary, keeps, with_own_page=False
         first.goto("about:blank")
         first.evaluate(RECORD)
         wait_for_condition(first, lambda: first.evaluate(HAS_FOCUS), lambda focused: focused is True, "the page never had the focus of its own window")
-        with launch(firefox_binary) as b:
-            taker = b.new_page()
-            taker.goto("about:blank")
-            wait_for_condition(taker, lambda: taker.evaluate(HAS_FOCUS), lambda focused: focused is True, "the second session's page never took the focus")
+        with in_a_thread_of_its_own(firefox_binary) as b:
+            b.run(takes_the_focus)
             if keeps:
                 first.evaluate(TWO_FRAMES)
             else:
