@@ -1,6 +1,6 @@
 """Every e2e test of the wrapper is in exactly one row of the whole-e2e suite on each system, or is a named exclusion with its reason: nothing falls between.
 
-The candidate's gate runs the e2e of the wrapper on the engine under test as rows of ``ci/required-suites.json``: ``wrapper.e2e.suite.linux.1`` and ``.2`` on Linux,
+The candidate's gate runs the e2e of the wrapper on the engine under test as rows of ``ci/required-suites.json``: ``wrapper.e2e.suite.linux.1`` to ``.3`` on Linux,
 ``wrapper.e2e.suite.windows.1`` to ``.4`` on Windows, and ``wrapper.e2e.suite.windows.control_a`` (the keyboard shortcut, alone on its own runner). The judge takes
 files and node ids only, and a skipped test is red, so the partition is a list written by hand and this test is what keeps it whole. With no browser, from the
 collection of ``-m e2e``:
@@ -37,7 +37,7 @@ REQUIRED = ROOT / "ci" / "required-suites.json"
 MARKER = "e2e"
 
 PARTITION = {
-    "linux": ["wrapper.e2e.suite.linux.1", "wrapper.e2e.suite.linux.2"],
+    "linux": ["wrapper.e2e.suite.linux.1", "wrapper.e2e.suite.linux.2", "wrapper.e2e.suite.linux.3"],
     "windows": ["wrapper.e2e.suite.windows.1", "wrapper.e2e.suite.windows.2", "wrapper.e2e.suite.windows.3", "wrapper.e2e.suite.windows.4"],
 }
 CONTROL_A_ROW = "wrapper.e2e.suite.windows.control_a"
@@ -77,19 +77,11 @@ EXCLUDED = {
         (("windows",), "skips on Windows: Xvfb is the Linux path; Windows hides on a desktop"),
     "tests/test_juggler_posix_pipe.py::test_the_posix_pipe_carries_messages_both_ways":
         (("windows",), "skips on Windows: the POSIX leg does not execute there, the pipe travels as inheritable HANDLEs"),
-    "tests/test_fission_strategy1_bench.py::test_cross_site_iframe_gets_its_own_process":
-        (("windows",), "skips on Windows: only Linux names a content process by the site it hosts"),
-    "tests/test_fission_strategy1_bench.py::test_same_site_other_port_stays_in_process":
-        (("windows",), "skips on Windows: only Linux names a content process by the site it hosts"),
-    "tests/test_popup_pages.py::test_window_open_features_headed_humanized":
-        (("windows",), "skips on Windows: the test says a headed run needs a display (it finds none on the runner)"),
     "tests/test_screenshot_of_text_returns_linux_e2e.py::test_a_screenshot_of_a_page_with_text_returns":
         (("windows",), "skips on Windows: the Linux text path"),
-    "tests/test_a_context_that_ends_leaves_no_process_e2e.py::test_closed_contexts_with_a_never_stopping_service_worker_leave_no_process":
-        (("windows",), "skips on Windows: only Linux names a content process by the site it hosts"),
 }
 #: Changed by hand, together with the list above: an exclusion is a test the candidate does not run, and it may not be added in silence.
-EXCLUDED_COUNT = 20
+EXCLUDED_COUNT = 16
 
 
 @functools.lru_cache(maxsize=None)
