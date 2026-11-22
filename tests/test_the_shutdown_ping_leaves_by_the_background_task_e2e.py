@@ -8,6 +8,10 @@ background task is the one whose request says `User-Agent: pingsender/2.0`. The 
 left from the host's own address says where the browser is. The server of telemetry is a pref (`toolkit.telemetry.server`), so the test points it at a
 server of its own on 127.0.0.1: nothing leaves the machine.
 
+The address the test gives the session is `http://localhost:<port>`, and that is part of what the engine does: the background task keeps the allowlist the
+standalone pingsender had (`ALLOWED_ENDPOINTS` in `BackgroundTask_pingsender.sys.mjs`: `localhost` and `incoming.telemetry.mozilla.org`), so a ping addressed to
+any other host, `127.0.0.1` included, is refused by the task before a request is made and the ping stays on disk.
+
 What the test does. A session (seed 42, no proxy; the road of the session is decided by the launch) with the telemetry server pref at the fake endpoint
 is opened and closed. The session ENDS (`_session_end.EndingPlaywright`: the reaper has finished, so the sender is finished or ended), then the test
 reads what the endpoint received.
@@ -17,8 +21,10 @@ What it asserts:
   with a body;
 * a second endpoint that the session was NOT pointed at received nothing (the pref is the address, there is no other).
 
-Negative control: the same session with `datareporting.healthreport.uploadEnabled` false (the switch retail Firefox has for it) sends no request with
-that user agent. The test therefore fails when the ping leaves by another program (its user agent differs) and when the session sends none.
+Negative controls, each a session that must send nothing with that user agent: (1) the same session with `datareporting.healthreport.uploadEnabled`
+false (the switch retail Firefox has for it); (2) the same session pointed at an endpoint whose host is `127.0.0.1`, which the task's allowlist refuses.
+The test therefore fails when the ping leaves by another program (its user agent differs), when the session sends none, and when the allowlist stops
+refusing a host that is not on it.
 """
 from __future__ import annotations
 
@@ -40,7 +46,7 @@ BACKGROUND_TASK_AGENT = "pingsender/2.0"
 class Endpoint:
     """A telemetry endpoint on 127.0.0.1 (a port the OS gives) that records every request and answers 200."""
 
-    def __init__(self):
+    def __init__(self, host="localhost"):
         self.requests = []
         outer = self
 
@@ -64,7 +70,7 @@ class Endpoint:
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._server.daemon_threads = True
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
-        self.url = "http://127.0.0.1:%d" % self._server.server_address[1]
+        self.url = "http://%s:%d" % (host, self._server.server_address[1])
 
     def by_agent(self, agent):
         return [r for r in self.requests if r["agent"] == agent]
@@ -98,7 +104,7 @@ def test_the_shutdown_ping_is_sent_by_the_background_task_and_not_by_the_host_pr
         assert all(r["method"] == "POST" and r["path"].startswith("/submit/telemetry/") and r["bytes"] > 0 for r in pings), pings
         assert elsewhere.requests == [], "an endpoint the session was not pointed at received %s" % (elsewhere.requests,)
 
-        # Control: with the upload switched off no ping leaves, so the request above is the product's and not the endpoint's own noise.
+        # Control 1: with the upload switched off no ping leaves, so the request above is the product's and not the endpoint's own noise.
         control = Endpoint()
         try:
             session(firefox_binary, control, extra_prefs={UPLOAD: False})
@@ -106,6 +112,15 @@ def test_the_shutdown_ping_is_sent_by_the_background_task_and_not_by_the_host_pr
                 "a session with the upload switched off still sent a ping: %s" % (control.requests,))
         finally:
             control.close()
+
+        # Control 2: the same session, same upload switch, the endpoint named by an address that is not on the task's allowlist: the task refuses it.
+        refused = Endpoint(host="127.0.0.1")
+        try:
+            session(firefox_binary, refused)
+            assert refused.requests == [], (
+                "a ping addressed to a host that is not on the background task's allowlist reached the endpoint: %s" % (refused.requests,))
+        finally:
+            refused.close()
     finally:
         endpoint.close()
         elsewhere.close()

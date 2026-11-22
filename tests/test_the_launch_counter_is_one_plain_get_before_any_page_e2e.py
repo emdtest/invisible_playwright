@@ -1,4 +1,4 @@
-"""The launch counter is ONE plain GET to the address the core declares, sent by the browser when it starts, before any page exists (firefox-68, Linux and Windows).
+"""The launch counter is ONE plain GET to the address the engine carries, sent by the browser when it starts, before any page exists (firefox-68, Linux and Windows).
 
 What it fixes, in the published engine (firefox-68), for the hooks of `platform/launch-counter` (`browser/components/BrowserGlue.sys.mjs`: the hook in
 `_beforeUIStartup`, which loads `StealthLaunchCounter.sys.mjs`): at start the parent process does `fetch(<counter address>, {method: "GET",
@@ -10,7 +10,9 @@ How it observes a request to a host of the internet without a network. The brows
 requests: the counter is made by the parent, in no page). The proxy answers the `CONNECT` to the counter's host and terminates TLS with a leaf of a
 lab CA that the profile trusts (the CA is added to the profile with the engine's own xpcshell, `_lab_pki.add_ca_to_profile`), so it reads the GET itself:
 its method, its headers, its order. Every other request through the proxy is refused and recorded. Nothing leaves the machine. The address is read from the
-core (`invisible_core.prefs.USAGE_PING_URL`): the test follows the declaration, it does not copy it.
+module the binary runs (`resource:///modules/StealthLaunchCounter.sys.mjs`, in the `browser/omni.ja` next to the executable): in core 68.80.0
+the core declares no counter address (no pref, no `USAGE_PING_URL`), the engine carries one constant, the same in every binary, and the test follows
+that constant in the binary under test, it does not copy it.
 
 What the test asserts:
 * the GET arrives while NO page exists (the test waits for it before it opens a page, and the page server has received nothing at that moment);
@@ -25,9 +27,12 @@ of them, and a launch that sent the counter twice, or from the page, is red.
 from __future__ import annotations
 
 import itertools
+import re
 import socket
 import ssl
 import threading
+import zipfile
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -187,9 +192,21 @@ class PageServer:
         self._server.server_close()
 
 
+def counter_address(firefox_binary):
+    """The address the engine's launch counter fetches, read from the module the browser runs (the one constant of
+    `StealthLaunchCounter.sys.mjs`, inside `browser/omni.ja` beside the executable)."""
+    omni = Path(firefox_binary).resolve().parent / "browser" / "omni.ja"
+    with zipfile.ZipFile(omni) as archive:
+        source = archive.read("modules/StealthLaunchCounter.sys.mjs").decode("utf-8")
+    found = re.findall(r'USAGE_PING_URL\s*=\s*"([^"]+)"', source)
+    assert len(found) == 1, "the counter module of %s declares %d addresses: %s" % (omni, len(found), found)
+    return found[0]
+
+
 def test_the_browser_sends_one_plain_get_to_the_counter_before_any_page(firefox_binary, tmp_path):
-    from invisible_core.prefs import USAGE_PING_URL
     from invisible_playwright import InvisiblePlaywright
+
+    USAGE_PING_URL = counter_address(firefox_binary)
 
     counter = urlsplit(USAGE_PING_URL)
     assert counter.scheme == "https" and counter.hostname, USAGE_PING_URL
